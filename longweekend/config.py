@@ -14,6 +14,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
+from .conferences import (
+    ConferenceOccurrence,
+    find_conference,
+    load_conferences,
+    occurrences_for,
+)
+from .observances import PersonalDay, resolve_observances
 from .catalog import (
     DEFAULT_WORKWEEK,
     KNOWN,
@@ -55,6 +62,13 @@ class CompanyConfig:
     max_consecutive_pto: Optional[int] = None
     blackout: Set[dt.date] = field(default_factory=set)
     committed: Set[dt.date] = field(default_factory=set)
+    #: Personal days off (religious observances, conferences). These are folded
+    #: into ``committed``; kept separately so the report can say what each one
+    #: was and what it cost.
+    observances: List[PersonalDay] = field(default_factory=list)
+    conferences: List[ConferenceOccurrence] = field(default_factory=list)
+    #: Days taken either side of a conference to travel.
+    conference_travel: int = 0
 
     def holiday_names(self) -> List[str]:
         return [rule.name for rule in self.holidays]
@@ -180,6 +194,13 @@ def build_config(
     max_consecutive_pto: Optional[int] = None,
     blackout: Sequence[str] = (),
     committed: Sequence[str] = (),
+    observe: Sequence[str] = (),
+    conferences: Sequence[str] = (),
+    conference_file: Optional[str] = None,
+    conference_travel: int = 0,
+    years: Sequence[int] = (),
+    diaspora: bool = True,
+    include_erev: bool = False,
 ) -> CompanyConfig:
     """Layer preset, config file and CLI overrides into one configuration."""
     if preset not in PRESETS:
@@ -233,6 +254,31 @@ def build_config(
     if committed:
         config.committed |= parse_date_ranges(committed)
 
+    if conference_travel:
+        config.conference_travel = conference_travel
+
+    if observe:
+        config.observances = resolve_observances(
+            observe, years or _default_years(), diaspora=diaspora, include_erev=include_erev
+        )
+        config.committed |= {o.date for o in config.observances}
+
+    if conferences:
+        catalog = load_conferences(conference_file)
+        for name in conferences:
+            for chunk in str(name).split(","):
+                if not chunk.strip():
+                    continue
+                conference = find_conference(chunk.strip(), catalog)
+                for occurrence in occurrences_for(conference, years or _default_years()):
+                    config.conferences.append(occurrence)
+                    dates = set(occurrence.dates())
+                    for step in range(1, config.conference_travel + 1):
+                        dates.add(occurrence.start - dt.timedelta(days=step))
+                        dates.add(occurrence.end + dt.timedelta(days=step))
+                    config.committed |= dates
+        config.conferences.sort(key=lambda o: o.start)
+
     overlap = config.blackout & config.committed
     if overlap:
         raise ValueError(
@@ -266,10 +312,20 @@ def _validate_numbers(config: CompanyConfig) -> None:
         raise ValueError(f"carryover cannot be negative (got {config.carryover})")
     if config.min_break < 1:
         raise ValueError(f"min_break must be at least 1 (got {config.min_break})")
+    if config.conference_travel < 0:
+        raise ValueError(
+            f"conference travel days cannot be negative (got {config.conference_travel})"
+        )
     if config.max_consecutive_pto is not None and config.max_consecutive_pto < 1:
         raise ValueError(
             f"max_consecutive_pto must be at least 1 (got {config.max_consecutive_pto})"
         )
+
+
+def _default_years() -> List[int]:
+    """The window the CLI would have used, for callers that skip it."""
+    this_year = dt.date.today().year
+    return [this_year, this_year + 1]
 
 
 def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> None:
@@ -335,6 +391,8 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.min_break = int(data["min_break"])  # type: ignore[arg-type]
     if "max_consecutive_pto" in data:
         config.max_consecutive_pto = int(data["max_consecutive_pto"])  # type: ignore[arg-type]
+    if "conference_travel" in data:
+        config.conference_travel = int(data["conference_travel"])  # type: ignore[arg-type]
     if "blackout" in data:
         config.blackout |= parse_date_ranges(str(v) for v in _as_list(data["blackout"]))
     if "committed" in data:

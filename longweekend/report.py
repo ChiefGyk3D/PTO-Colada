@@ -30,6 +30,8 @@ def render_text(
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
     lines.append("")
+    if plan is not None:
+        lines.extend(_render_headline(plan, config))
 
     for year in sorted(holidays_by_year):
         header = f"{year}"
@@ -52,6 +54,7 @@ def render_text(
             lines.append("")
 
         if plan is None:
+            lines.extend(_render_observances(config, None, year))
             lines.append(f"  Long weekends and how to extend them (target {config.min_break} days)")
             for opportunity in opportunities_by_year.get(year, []):
                 lines.append(
@@ -65,6 +68,93 @@ def render_text(
     if plan is not None:
         lines.extend(_render_totals(plan))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_headline(plan: PtoPlan, config: CompanyConfig) -> List[str]:
+    """The answer, before the detail: what this plan buys you."""
+    days_off = plan.total_days_off
+    spent = plan.total_pto
+    longest = max((b.length for b in plan.breaks), default=0)
+    lines = [
+        f"  You get {days_off} days off across {len(plan.breaks)} break(s) of "
+        f"{plan.min_break}+ days,",
+    ]
+    if spent:
+        lines.append(
+            f"  spending {spent} day(s) of leave -- {days_off / spent:.1f} days off "
+            "for every day you book."
+        )
+    else:
+        lines.append("  without booking a single day of leave.")
+    if longest:
+        best = max(plan.breaks, key=lambda b: b.length)
+        lines.append(f"  Longest break: {longest} days, {best.label()}.")
+    lines.append("")
+    return lines
+
+
+def _render_observances(config: CompanyConfig, plan: Optional[PtoPlan], year: int) -> List[str]:
+    """What the days you chose yourself actually cost you."""
+    kinds: Dict[dt.date, DayKind] = {}
+    if plan is not None:
+        kinds = {day.date: day.kind for day in plan.days}
+
+    rows: List[str] = []
+    for observance in config.observances:
+        if observance.date.year != year:
+            continue
+        rows.append(
+            _observance_row(observance.date, observance.name, observance.note, kinds)
+        )
+    travel = dt.timedelta(days=config.conference_travel)
+    for occurrence in config.conferences:
+        if occurrence.start.year != year:
+            continue
+        # Travel days are booked too, so they belong in the cost.
+        span = _date_span(occurrence.start - travel, occurrence.end + travel)
+        cost = sum(
+            1
+            for date in _dates_between(occurrence.start - travel, occurrence.end + travel)
+            if kinds.get(date) is DayKind.PTO
+        )
+        note = "" if occurrence.confirmed else "estimated dates"
+        where = f" ({occurrence.conference.city})" if occurrence.conference.city else ""
+        rows.append(
+            f"    {span:<12}  {occurrence.name + where:<30} {cost} day(s) of leave"
+            + (f"   ({note})" if note else "")
+        )
+
+    if not rows:
+        return []
+    return ["  Days you are taking yourself"] + rows + [""]
+
+
+def _date_span(start: dt.date, end: dt.date) -> str:
+    if start == end:
+        return start.strftime("%b %d")
+    if start.month == end.month:
+        return f"{start.strftime('%b %d')}-{end.strftime('%d')}"
+    return f"{start.strftime('%b %d')}-{end.strftime('%b %d')}"
+
+
+def _dates_between(start: dt.date, end: dt.date) -> List[dt.date]:
+    return [start + dt.timedelta(days=n) for n in range((end - start).days + 1)]
+
+
+def _observance_row(
+    date: dt.date, name: str, note: str, kinds: Dict[dt.date, DayKind]
+) -> str:
+    kind = kinds.get(date)
+    if kind is DayKind.PTO:
+        cost = "1 day of leave"
+    elif kind is DayKind.HOLIDAY:
+        cost = "already a company holiday"
+    elif kind is DayKind.WEEKEND:
+        cost = "free, non-working day"
+    else:
+        cost = "outside the planned window"
+    row = f"    {date.strftime('%a %b %d')}  {name:<30} {cost}"
+    return f"{row}   ({note})" if note else row
 
 
 def _render_plan_year(plan: PtoPlan, year: int, config: CompanyConfig) -> List[str]:
@@ -83,6 +173,8 @@ def _render_plan_year(plan: PtoPlan, year: int, config: CompanyConfig) -> List[s
         lines.append(f"    {item.length:2d} days  {item.label():<34} {cost:>7}  {detail}")
         if names:
             lines.append(f"{'':>14}covers {names}")
+
+    lines.extend(_render_observances(config, plan, year))
 
     spent = plan.spent_by_year.get(year, 0)
     granted = plan.granted_total(year)
@@ -171,6 +263,20 @@ def render_json(
             "holidays": config.holiday_names(),
             "blackout": sorted(d.isoformat() for d in config.blackout),
             "committed": sorted(d.isoformat() for d in config.committed),
+            "observances": [
+                {"name": o.name, "date": o.date.isoformat(), "source": o.source, "note": o.note}
+                for o in config.observances
+            ],
+            "conferences": [
+                {
+                    "name": o.name,
+                    "start": o.start.isoformat(),
+                    "end": o.end.isoformat(),
+                    "confirmed": o.confirmed,
+                    "city": o.conference.city,
+                }
+                for o in config.conferences
+            ],
         },
         "years": {},
     }
@@ -270,13 +376,17 @@ def render_ics(
                 )
 
     if plan is not None:
+        named = _named_days(config)
         for date in plan.pto_dates:
+            name = named.get(date)
             lines.extend(
                 _event(
                     start=date,
                     end=date + dt.timedelta(days=1),
-                    summary="PTO",
-                    description="Planned time off",
+                    summary=name or "PTO",
+                    description=(
+                        f"{name} (booked as time off)" if name else "Planned time off"
+                    ),
                     stamp=stamp,
                     category="PTO",
                 )
@@ -297,6 +407,19 @@ def render_ics(
 
     lines.append("END:VCALENDAR")
     return "\r\n".join(_fold(line) for line in lines) + "\r\n"
+
+
+def _named_days(config: CompanyConfig) -> Dict[dt.date, str]:
+    """Dates the user booked for a specific reason, so events can say why."""
+    named: Dict[dt.date, str] = {}
+    for occurrence in config.conferences:
+        for date in occurrence.dates():
+            named[date] = occurrence.name
+    # Observances win over conferences on a clash: they are the more specific
+    # reason for that particular day being unavailable.
+    for observance in config.observances:
+        named[observance.date] = observance.name
+    return named
 
 
 def _event(

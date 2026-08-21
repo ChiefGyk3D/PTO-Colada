@@ -299,7 +299,7 @@ def _validate_commitments(
                 f"{count} committed PTO day(s) in {year} exceed the {available} day(s) "
                 f"available that year (budget {grant}"
                 + (f" + {budget.carryover} carryover" if year > first_year and budget.carryover else "")
-                + ")"
+                + f"). Raise the budget by {count - available} day(s), or commit fewer days."
             )
 
 

@@ -32,6 +32,10 @@ corporate - 12 holidays, Mon-Fri workweek, nearest working day observance
   15 of 15 PTO day(s) used in 2026
 ```
 
+It also knows the days you take off yourself — Jewish holidays off a real
+Hebrew calendar, security conferences off a catalog you can extend — and plans
+the rest of your leave around them.
+
 ## Install
 
 No runtime dependencies — the standard library is enough.
@@ -284,6 +288,118 @@ nine-day ones. Raising `--min-break` is the blunter version of the same idea:
 
 `--blackout` and `--commit` are repeatable and accept single dates or
 `START:END` ranges.
+
+## Days you take off yourself
+
+Company holidays are free: the office is shut and your balance is untouched.
+The days *you* take are not. Tell the planner about them and two things happen:
+the arithmetic gets honest, and the planner starts building around them instead
+of ignoring them.
+
+```
+long-weekend --pto 15 --observe jewish
+long-weekend --pto 15 --observe "Yom Kippur" --observe "Passover"
+long-weekend --pto 15 --observe 2026-07-20        # any date you already know
+```
+
+Each one is charged to your budget unless it lands on a weekend or a day the
+company already closes — and the report says which:
+
+```
+  Days you are taking yourself
+    Thu Apr 02  Pesach                         1 day of leave
+    Fri Apr 03  Pesach (day 2)                 1 day of leave   (diaspora second day)
+    Sat Sep 12  Rosh Hashanah                  free, non-working day
+    Mon Sep 21  Yom Kippur                     1 day of leave
+```
+
+Because they are committed rather than optional, the planner bridges *from*
+them. Yom Kippur 2026 is a Monday, so the weekend before it is already yours;
+the planner sees the 3-day break sitting there and buys the Tuesday to make it
+four.
+
+### The Hebrew calendar
+
+Jewish holidays are fixed on the Hebrew calendar and wander across the
+Gregorian one, so they are computed rather than tabulated — a table goes stale,
+an algorithm does not. The full rule-based calendar is in
+[`longweekend/hebrew.py`](longweekend/hebrew.py): leap years, the molad, the
+postponement rules, and conversion in both directions, in the standard library
+alone.
+
+| Set | What it books |
+| --- | --- |
+| `jewish` | Yom Kippur, Rosh Hashanah and the yom tov days work is prohibited on |
+| `jewish-all` | the above plus Chol HaMoed, Hanukkah, Purim, Tu BiShvat, Lag BaOmer, Tisha B'Av |
+| `jewish-high-holidays` | Rosh Hashanah, Yom Kippur, Shemini Atzeret, Simchat Torah |
+
+Naming a festival books the days work is actually prohibited, not the whole
+span: `--observe "Passover"` takes the four yom tov days and leaves Chol HaMoed
+alone. Ask for `jewish-all` if you want every day of it. Names are matched
+loosely, so `Passover`, `Pesach`, `Chanukah` and `Succot` all land where you
+would expect.
+
+Two flags for the details that matter:
+
+```
+long-weekend --observe jewish --israel   # one festival day, not two
+long-weekend --observe jewish --erev     # also take the day it begins at sunset
+```
+
+A Hebrew day starts at sunset, so every holiday actually begins the evening
+before the date shown. `--erev` books that day too — and only for the *first*
+day of a festival, since the evening before day two is day one, which you have
+already booked.
+
+### Security conferences
+
+```
+long-weekend --list-conferences
+long-weekend --pto 15 --conference "DEF CON" --conference-travel 1
+long-weekend --pto 20 --conference defcon --conference ccc
+```
+
+The bundled catalog knows DEF CON, Black Hat USA and Europe, BSides Las Vegas,
+RSAC and the Chaos Communication Congress, by name or by the abbreviation you
+would actually type. Announced dates are reported as-is; years with nothing
+announced fall back to a recurrence rule and are clearly labelled
+`(estimated)`, because organisers move these:
+
+```
+  DEF CON
+      2026  Thu Aug 06 - Sun Aug 09, Las Vegas, NV
+      2027  Thu Aug 05 - Sun Aug 08, Las Vegas, NV  (estimated)
+```
+
+Where no rule fits — RSAC wanders around the spring — the tool says nothing
+rather than inventing a date. Anything bundled will go stale eventually, so
+bring your own:
+
+```
+long-weekend --conferences my-cons.json --conference "My Local Con"
+```
+
+Same format as [the bundled file](longweekend/data/conferences.json); your
+entries win on a name clash.
+
+If your employer pays for the trip, it is not your leave — use `--blackout` on
+those dates instead, so the planner keeps its hands off them without charging
+you.
+
+## Not sure where to start
+
+```
+long-weekend --interactive
+```
+
+Seven questions, then the plan — and the command line that would have produced
+it, so you never have to answer them again:
+
+```
+Next time, skip the questions:
+
+    long-weekend --pto 20 --floating 2 --observe jewish --conference "DEF CON"
+```
 
 ## Output formats
 

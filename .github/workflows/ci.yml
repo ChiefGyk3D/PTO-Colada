@@ -31,3 +31,8 @@ jobs:
           python holiday.py --years 1
           python -m longweekend.cli --pto 15 --format json > /dev/null
           python -m longweekend.cli --pto 15 --format ics > /dev/null
+          python -m longweekend.cli --list-known > /dev/null
+          python -m longweekend.cli --list-observances > /dev/null
+          python -m longweekend.cli --list-conferences > /dev/null
+          python -m longweekend.cli --pto 15 --observe jewish --years 1 > /dev/null
+          python -m longweekend.cli --pto 15 --conference "DEF CON" --years 1 > /dev/null

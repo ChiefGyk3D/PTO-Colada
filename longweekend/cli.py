@@ -8,6 +8,8 @@ import sys
 from typing import Dict, List, Optional, Sequence
 
 from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
+from .conferences import describe_catalog, load_conferences
+from .observances import describe_sets
 from .config import CompanyConfig, build_config
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import render_ics, render_json, render_text
@@ -148,6 +150,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="PTO you have already booked; charged to the budget (repeatable)",
     )
 
+    personal = parser.add_argument_group("days you take off yourself")
+    personal.add_argument(
+        "--observe", action="append", default=[], metavar="WHAT",
+        help=(
+            "days you will take off regardless: a set such as 'jewish', a "
+            "holiday name such as \"Yom Kippur\" or \"Passover\", or a date. "
+            "Charged to your budget, and the planner builds around them "
+            "(repeatable). See --list-observances"
+        ),
+    )
+    personal.add_argument(
+        "--israel", action="store_true",
+        help="use the Israeli festival calendar (no second diaspora day)",
+    )
+    personal.add_argument(
+        "--erev", action="store_true",
+        help="also take the day each Jewish holiday begins on, since it starts at sunset",
+    )
+    personal.add_argument(
+        "--conference", action="append", default=[], metavar="NAME",
+        help=(
+            "take a security conference off, e.g. --conference \"DEF CON\" "
+            "(repeatable). See --list-conferences"
+        ),
+    )
+    personal.add_argument(
+        "--conference-travel", type=int, default=0, metavar="DAYS",
+        help="days either side of a conference for travel (default: 0)",
+    )
+    personal.add_argument(
+        "--conferences", dest="conference_file", metavar="PATH",
+        help="your own conference JSON, overriding or extending the bundled catalog",
+    )
+
     output = parser.add_argument_group("output")
     output.add_argument(
         "--format", choices=("text", "json", "ics"), default="text",
@@ -164,6 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     output.add_argument(
         "--list-known", action="store_true",
         help="show every holiday that --add accepts by name, and exit",
+    )
+    output.add_argument(
+        "--list-observances", action="store_true",
+        help="show what --observe accepts, and exit",
+    )
+    output.add_argument(
+        "--list-conferences", action="store_true",
+        help="show the conference catalog and its dates, and exit",
+    )
+    output.add_argument(
+        "--interactive", "-i", action="store_true",
+        help="answer a few questions instead of remembering flags",
     )
 
     parser.add_argument(
@@ -231,7 +279,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(_list_known())
         return 0
 
+    if args.list_observances:
+        print(describe_sets())
+        return 0
+
     today = dt.date.today()
+
+    if args.list_conferences:
+        try:
+            catalog = load_conferences(args.conference_file)
+        except (ValueError, FileNotFoundError) as exc:
+            parser.error(str(exc))
+            return 2  # pragma: no cover - parser.error exits
+        print(describe_catalog(catalog, [today.year, today.year + 1, today.year + 2]))
+        return 0
+
+    if args.interactive:
+        from .wizard import run_wizard
+
+        argv = run_wizard(args)
+        if argv is None:
+            return 1
+        args = parser.parse_args(argv)
+
     preset = "nonstandard" if args.nonstandard and args.preset == "federal" else args.preset
 
     try:
@@ -252,6 +322,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_consecutive_pto=args.max_consecutive_pto,
             blackout=args.blackout,
             committed=args.committed,
+            observe=args.observe,
+            conferences=args.conference,
+            conference_file=args.conference_file,
+            conference_travel=args.conference_travel,
+            years=range(start_year, end_year + 1),
+            diaspora=not args.israel,
+            include_erev=args.erev,
         )
     except (ValueError, FileNotFoundError) as exc:
         parser.error(str(exc))
