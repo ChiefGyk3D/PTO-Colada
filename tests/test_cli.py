@@ -70,6 +70,49 @@ class TestConfig:
             parse_pto_by_year([bad])
 
 
+class TestNumericValidation:
+    """Budgets and limits are checked even when the planner never runs."""
+
+    def test_negative_pto_is_rejected(self):
+        with pytest.raises(ValueError, match="PTO budget cannot be negative"):
+            build_config(pto=-3)
+
+    def test_negative_carryover_is_rejected(self):
+        with pytest.raises(ValueError, match="carryover cannot be negative"):
+            build_config(carryover=-1)
+
+    def test_min_break_below_one_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            build_config(min_break=0)
+
+    def test_max_consecutive_pto_below_one_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            build_config(max_consecutive_pto=0)
+
+    def test_negative_per_year_budget_from_a_config_file_is_rejected(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps({"pto_by_year": {"2026": -5}}), encoding="utf-8")
+        with pytest.raises(ValueError, match="cannot be negative"):
+            build_config(config_path=str(path))
+
+    def test_a_zero_budget_is_allowed(self):
+        assert build_config(pto=0).pto_days == 0
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--pto", "-3"],
+            ["--carryover", "-1"],
+            ["--min-break", "0"],
+            ["--max-consecutive-pto", "0"],
+        ],
+    )
+    def test_the_cli_exits_with_an_error(self, argv):
+        with pytest.raises(SystemExit) as excinfo:
+            main(argv + ["--years", "1"])
+        assert excinfo.value.code == 2
+
+
 class TestConfigFile:
     def write(self, tmp_path, name, text):
         path = tmp_path / name

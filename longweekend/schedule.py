@@ -14,7 +14,16 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .catalog import DEFAULT_WORKWEEK, ResolvedHoliday
 
-__all__ = ["DayKind", "Day", "Break", "build_days", "find_breaks", "date_range"]
+__all__ = [
+    "DayKind",
+    "Day",
+    "Break",
+    "Opportunity",
+    "build_days",
+    "find_breaks",
+    "find_opportunities",
+    "date_range",
+]
 
 
 class DayKind(str, Enum):
@@ -179,7 +188,6 @@ def find_opportunities(
     adjacent days off. The cheapest bridge reaching ``target`` consecutive days
     wins; if none reaches it, the best available improvement is reported.
     """
-    index_by_date = {day.date: i for i, day in enumerate(days)}
     opportunities: List[Opportunity] = []
     for index, day in enumerate(days):
         if day.kind is not DayKind.HOLIDAY:

@@ -24,7 +24,14 @@ from .catalog import (
     rule_from_mapping,
 )
 
-__all__ = ["CompanyConfig", "load_config_file", "build_config", "parse_date", "parse_date_ranges"]
+__all__ = [
+    "CompanyConfig",
+    "load_config_file",
+    "build_config",
+    "parse_date",
+    "parse_date_ranges",
+    "parse_pto_by_year",
+]
 
 
 @dataclass
@@ -197,7 +204,32 @@ def build_config(
             "date(s) are both blacked out and committed: "
             + ", ".join(d.isoformat() for d in sorted(overlap))
         )
+
+    _validate_numbers(config)
     return config
+
+
+def _validate_numbers(config: CompanyConfig) -> None:
+    """Reject nonsensical budgets and limits wherever they came from.
+
+    The planner checks its own arguments, but it only runs when a PTO budget
+    is set, so a bad --min-break or --max-consecutive-pto would otherwise pass
+    silently in the report-only path. Checking the assembled config catches
+    values from config files and the command line alike.
+    """
+    if config.pto_days is not None and config.pto_days < 0:
+        raise ValueError(f"PTO budget cannot be negative (got {config.pto_days})")
+    for year, days in sorted(config.pto_by_year.items()):
+        if days < 0:
+            raise ValueError(f"PTO budget for {year} cannot be negative (got {days})")
+    if config.carryover < 0:
+        raise ValueError(f"carryover cannot be negative (got {config.carryover})")
+    if config.min_break < 1:
+        raise ValueError(f"min_break must be at least 1 (got {config.min_break})")
+    if config.max_consecutive_pto is not None and config.max_consecutive_pto < 1:
+        raise ValueError(
+            f"max_consecutive_pto must be at least 1 (got {config.max_consecutive_pto})"
+        )
 
 
 def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> None:
