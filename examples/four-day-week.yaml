@@ -1,0 +1,27 @@
+# A company on a four-day week with a Sunday-Thursday schedule.
+# Requires PyYAML:  pip install "long-weekend-planner[yaml]"
+name: Globex (Sun-Thu, 4-day week)
+workweek: SUN-WED
+observance: next
+
+holidays:
+  - New Year's Day=01-01
+  - name: Spring Break
+    month: 4
+    weekday: MON
+    n: 2
+  - Independence Day=07-04
+  - name: Thanksgiving
+    month: 11
+    weekday: THU
+    n: 4
+  - name: Day After Thanksgiving
+    after: Thanksgiving
+    days: 1
+  - Christmas Day=12-25
+  - name: Winter Shutdown
+    date: 2026-12-28
+
+pto_days: 12
+carryover: 4
+min_break: 4

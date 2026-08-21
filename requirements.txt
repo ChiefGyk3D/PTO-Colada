@@ -1,3 +1,8 @@
-python-dateutil==2.8.2
-holidays==0.11.1
-pyluach==1.3.0
+# The planner has no runtime dependencies -- the standard library is enough.
+#
+# PyYAML is optional and only needed to read .yaml/.yml company configs;
+# .json configs work without it.
+PyYAML>=5.1
+
+# For running the test suite:
+#   pip install -e ".[dev]"

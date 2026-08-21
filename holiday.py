@@ -1,76 +1,19 @@
-import argparse
-import datetime
-from dateutil.relativedelta import relativedelta, MO, TH, FR
+#!/usr/bin/env python3
+"""Backwards-compatible entry point.
 
-# Define standard fixed and floating date holidays
-standard_fixed_holidays = [("New Year's Day", 1, 1),  # New Year's Day
-                           ("Independence Day", 7, 4),  # Independence Day
-                           ("Veterans Day", 11, 11),  # Veterans Day
-                           ("Christmas Day", 12, 25)]  # Christmas Day
+The original single-file script lives on as a thin wrapper so that existing
+invocations keep working:
 
-standard_floating_holidays = [("Martin Luther King Jr. Day", 1, MO(3)),
-                              ("Presidents' Day", 2, MO(3)),
-                              ("Memorial Day", 5, MO(-1)),
-                              ("Labor Day", 9, MO(1)),
-                              ("Thanksgiving", 11, TH(4))]
+    python3 holiday.py
+    python3 holiday.py --nonstandard
 
-# Define non-standard fixed and floating date holidays
-nonstandard_fixed_holidays = [("New Year's Day", 1, 1),  # New Year's Day
-                              ("Independence Day", 7, 4),  # Independence Day
-                              ("Christmas Day", 12, 25)]  # Christmas Day
+Everything the old script did is still available, and the full feature set --
+company presets, custom holiday sets, PTO planning, JSON and calendar export --
+is reachable through the same command line. Run ``python3 holiday.py --help``
+or install the package and use the ``long-weekend`` command.
+"""
 
-nonstandard_floating_holidays = [("Memorial Day", 5, MO(-1)),
-                                 ("Labor Day", 9, MO(1)),
-                                 ("Thanksgiving", 11, TH(4)),
-                                 ("Day After Thanksgiving", 11, FR(4))]
+from longweekend.cli import main
 
-def check_holiday_weekends(year_start, year_end, nonstandard):
-    holiday_data = {}
-
-    fixed_holidays = nonstandard_fixed_holidays if nonstandard else standard_fixed_holidays
-    floating_holidays = nonstandard_floating_holidays if nonstandard else standard_floating_holidays
-
-    for year in range(year_start, year_end+1):
-        holiday_data[year] = []
-
-        for holiday_name, month, day in fixed_holidays:
-            date = datetime.date(year, month, day)
-            weekday = date.weekday()
-
-            if weekday in [0, 4]:  # If the holiday is on a Monday or Friday
-                holiday_data[year].append((holiday_name, date.strftime("%B %d"), 'You have a three-day weekend.'))
-            elif weekday == 1:  # If the holiday is on a Tuesday
-                off_day = date - datetime.timedelta(days=1)
-                holiday_data[year].append((holiday_name, date.strftime("%B %d"), 'You can take off Monday, ' + off_day.strftime("%B %d") + ', for a four-day weekend.'))
-            elif weekday == 3:  # If the holiday is on a Thursday
-                off_day = date + datetime.timedelta(days=1)
-                holiday_data[year].append((holiday_name, date.strftime("%B %d"), 'You can take off Friday, ' + off_day.strftime("%B %d") + ', for a four-day weekend.'))
-
-        for holiday_name, month, rule in floating_holidays:
-            if rule.n < 0:
-                date = datetime.date(year, month, 1) + relativedelta(day=31, weekday=rule)
-            else:
-                date = datetime.date(year, month, 1) + relativedelta(weekday=rule)
-            holiday_data[year].append((holiday_name, date.strftime("%B %d"), 'You have a three-day weekend.'))
-
-        # Check for the Thanksgiving four-day weekend
-        thanksgiving = next((h for h in holiday_data[year] if h[0] == "Thanksgiving"), None)
-        day_after_thanksgiving = next((h for h in holiday_data[year] if h[0] == "Day After Thanksgiving"), None)
-        if thanksgiving and day_after_thanksgiving:
-            idx_thanksgiving = holiday_data[year].index(thanksgiving)
-            idx_day_after = holiday_data[year].index(day_after_thanksgiving)
-            holiday_data[year][idx_thanksgiving] = (thanksgiving[0], thanksgiving[1], 'You have a four-day weekend.')
-            holiday_data[year][idx_day_after] = (day_after_thanksgiving[0], day_after_thanksgiving[1], 'This is part of the four-day Thanksgiving weekend.')
-
-    # Print holiday data
-    for year, data in holiday_data.items():
-        print(f"\nIn {year}:")
-        for holiday_info in data:
-            print(f"    {holiday_info[0]} on {holiday_info[1]}: {holiday_info[2]}")
-
-# Add command line arguments
-parser = argparse.ArgumentParser()
-parser.add_argument('--nonstandard', action='store_true', help='Calculate for non-standard holidays')
-args = parser.parse_args()
-
-check_holiday_weekends(2023, 2025, args.nonstandard)
+if __name__ == "__main__":
+    raise SystemExit(main())
