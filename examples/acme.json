@@ -1,0 +1,18 @@
+{
+  "name": "Acme Corp",
+  "preset": "federal",
+  "drop": ["Columbus Day", "Veterans Day"],
+  "add": [
+    "Day After Thanksgiving=Thanksgiving+1",
+    "Christmas Eve=12-24",
+    "Founders Day=2nd FRI in MAY"
+  ],
+  "workweek": "MON-FRI",
+  "observance": "nearest",
+  "pto_days": 18,
+  "pto_by_year": { "2027": 23 },
+  "carryover": 5,
+  "min_break": 4,
+  "blackout": ["2026-09-28:2026-10-09"],
+  "committed": ["2026-07-20:2026-07-24"]
+}

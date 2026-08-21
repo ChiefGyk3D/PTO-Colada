@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "long-weekend-planner"
+version = "1.0.0"
+description = "Find long weekends and plan PTO around the holidays your employer actually observes."
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["holidays", "pto", "vacation", "calendar", "long weekend"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Scheduling",
+]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=5.1"]
+dev = ["pytest>=7.0", "PyYAML>=5.1"]
+
+[project.scripts]
+long-weekend = "longweekend.cli:main"
+
+[tool.setuptools]
+packages = ["longweekend"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
