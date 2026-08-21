@@ -41,14 +41,32 @@ __all__ = ["PtoPlan", "PtoBudget", "optimize_pto"]
 
 @dataclass
 class PtoBudget:
-    """PTO days available per calendar year, plus how many may roll over."""
+    """Days available per calendar year, plus how many may roll over.
+
+    Floating holidays are tracked apart from PTO because employers treat them
+    differently: they are granted per calendar year, they are use-it-or-lose-it,
+    and they never roll over. For scheduling they are interchangeable with PTO,
+    so the planner spends from one pool and attributes floating days first --
+    which is also what a rational employee does, since the PTO left at the end
+    of the year is the part that can carry.
+    """
 
     per_year: Dict[int, int] = field(default_factory=dict)
     default: int = 0
     carryover: int = 0
+    floating_per_year: Dict[int, int] = field(default_factory=dict)
+    floating: int = 0
 
     def for_year(self, year: int) -> int:
+        """PTO days granted in ``year`` (floating days excluded)."""
         return self.per_year.get(year, self.default)
+
+    def floating_for_year(self, year: int) -> int:
+        return self.floating_per_year.get(year, self.floating)
+
+    def total_for_year(self, year: int) -> int:
+        """Everything spendable in ``year``: PTO plus floating holidays."""
+        return self.for_year(year) + self.floating_for_year(year)
 
 
 @dataclass
@@ -60,6 +78,7 @@ class PtoPlan:
     spent_by_year: Dict[int, int]
     granted_by_year: Dict[int, int]
     min_break: int
+    floating_by_year: Dict[int, int] = field(default_factory=dict)
 
     @property
     def total_days_off(self) -> int:
@@ -67,10 +86,26 @@ class PtoPlan:
 
     @property
     def total_pto(self) -> int:
+        """Every day taken off, floating holidays included."""
         return len(self.pto_dates)
 
+    @property
+    def total_floating(self) -> int:
+        return sum(self.floating_used(year) for year in self.spent_by_year)
+
+    def granted_total(self, year: int) -> int:
+        return self.granted_by_year.get(year, 0) + self.floating_by_year.get(year, 0)
+
+    def floating_used(self, year: int) -> int:
+        """Floating days spent in ``year``; they are always drawn on first."""
+        return min(self.spent_by_year.get(year, 0), self.floating_by_year.get(year, 0))
+
+    def pto_used(self, year: int) -> int:
+        return self.spent_by_year.get(year, 0) - self.floating_used(year)
+
     def remaining(self, year: int) -> int:
-        return self.granted_by_year.get(year, 0) - self.spent_by_year.get(year, 0)
+        """Days of the year's whole allowance left unspent."""
+        return self.granted_total(year) - self.spent_by_year.get(year, 0)
 
 
 # State: (pto_remaining_this_year, capped_run_length, capped_pto_run_length)
@@ -101,16 +136,18 @@ def optimize_pto(
 
     plan_days = [Day(d.date, d.kind, d.holiday, d.blackout) for d in days]
     if not plan_days:
-        return _finish(plan_days, budget, {}, {}, min_break)
+        return _finish(plan_days, budget, {}, {}, min_break, {})
 
     _validate_commitments(plan_days, budget, committed)
 
     pto_run_cap = max_consecutive_pto if max_consecutive_pto is not None else 0
     granted: Dict[int, int] = {}
+    floating: Dict[int, int] = {}
 
     first_year = plan_days[0].date.year
     granted[first_year] = budget.for_year(first_year)
-    start_state: _State = (granted[first_year], 0, 0)
+    floating[first_year] = budget.floating_for_year(first_year)
+    start_state: _State = (budget.total_for_year(first_year), 0, 0)
     # value: (score, pto_spent) -- ranked by score, then by spending less.
     frontier: Dict[_State, Tuple[int, int]] = {start_state: (0, 0)}
     trace: List[Dict[_State, Tuple[_State, bool]]] = []
@@ -121,14 +158,21 @@ def optimize_pto(
         # part of the day's transition rather than as a separate pass so that
         # every state in the trace stays reachable when backtracking.
         regrant: Optional[int] = None
+        rollover_cap = 0
         if day.date.year != previous_year:
             granted[day.date.year] = budget.for_year(day.date.year)
-            regrant = granted[day.date.year]
+            floating[day.date.year] = budget.floating_for_year(day.date.year)
+            regrant = budget.total_for_year(day.date.year)
+            # Floating days expire with the year, and the pool is spent
+            # floating-first, so whatever is left over is PTO up to that
+            # year's PTO grant -- that, capped by the carryover allowance,
+            # is all that can roll forward.
+            rollover_cap = min(budget.carryover, granted[previous_year])
             previous_year = day.date.year
 
         frontier, step = _advance(
             frontier, day, min_break, pto_run_cap, day.date in committed,
-            regrant, budget.carryover, long_break_bonus,
+            regrant, rollover_cap, long_break_bonus,
         )
         if not frontier:
             raise ValueError(
@@ -148,7 +192,7 @@ def optimize_pto(
     spent: Dict[int, int] = {}
     for date in pto_dates:
         spent[date.year] = spent.get(date.year, 0) + 1
-    return _finish(plan_days, budget, spent, granted, min_break)
+    return _finish(plan_days, budget, spent, granted, min_break, floating)
 
 
 def _advance(
@@ -158,13 +202,15 @@ def _advance(
     pto_run_cap: int,
     is_committed: bool,
     regrant: Optional[int] = None,
-    carryover: int = 0,
+    rollover_cap: int = 0,
     long_break_bonus: int = 0,
 ) -> Tuple[Dict[_State, Tuple[int, int]], Dict[_State, Tuple[_State, bool]]]:
     """Expand every state across a single day.
 
     When ``regrant`` is set this day begins a new calendar year, so the
-    remaining allowance becomes the new grant plus whatever rolls over.
+    remaining allowance becomes the new grant plus whatever rolls over --
+    at most ``rollover_cap`` days, which already accounts for floating
+    holidays expiring rather than carrying.
     """
     next_frontier: Dict[_State, Tuple[int, int]] = {}
     step: Dict[_State, Tuple[_State, bool]] = {}
@@ -178,7 +224,7 @@ def _advance(
     for state, (score, spent) in frontier.items():
         remaining, run, pto_run = state
         if regrant is not None:
-            remaining = regrant + min(remaining, carryover)
+            remaining = regrant + min(remaining, rollover_cap)
 
         if day.is_off:  # already a holiday or a non-working day
             new_run, gain = _extend(run, min_break, long_break_bonus)
@@ -245,7 +291,7 @@ def _validate_commitments(
             by_year[date.year] = by_year.get(date.year, 0) + 1
 
     for year, count in sorted(by_year.items()):
-        grant = budget.for_year(year)
+        grant = budget.total_for_year(year)
         # Only a year after the first can receive rolled-over days.
         available = grant + (budget.carryover if year > first_year else 0)
         if count > available:
@@ -263,6 +309,7 @@ def _finish(
     spent: Dict[int, int],
     granted: Dict[int, int],
     min_break: int,
+    floating: Dict[int, int],
 ) -> PtoPlan:
     return PtoPlan(
         days=days,
@@ -272,4 +319,5 @@ def _finish(
         spent_by_year=spent,
         granted_by_year=granted,
         min_break=min_break,
+        floating_by_year=floating,
     )

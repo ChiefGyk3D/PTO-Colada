@@ -34,7 +34,11 @@ def render_text(
     for year in sorted(holidays_by_year):
         header = f"{year}"
         if plan is not None and year in plan.granted_by_year:
-            header += f"   {plan.granted_by_year[year]} PTO day(s) available"
+            floating = plan.floating_by_year.get(year, 0)
+            header += f"   {plan.granted_by_year[year]} PTO day(s)"
+            if floating:
+                header += f" + {floating} floating holiday(s)"
+            header += " available"
         lines.append(header)
         lines.append(_RULE)
 
@@ -81,12 +85,25 @@ def _render_plan_year(plan: PtoPlan, year: int, config: CompanyConfig) -> List[s
             lines.append(f"{'':>14}covers {names}")
 
     spent = plan.spent_by_year.get(year, 0)
-    granted = plan.granted_by_year.get(year, 0)
+    granted = plan.granted_total(year)
+    floating = plan.floating_by_year.get(year, 0)
     lines.append("")
-    lines.append(
-        f"  {spent} of {granted} PTO day(s) used in {year}"
-        + (f", {granted - spent} left over" if granted - spent > 0 else "")
-    )
+    if floating:
+        lines.append(
+            f"  {spent} of {granted} day(s) used in {year} "
+            f"({plan.pto_used(year)} PTO, {plan.floating_used(year)} floating)"
+            + (f", {granted - spent} left over" if granted - spent > 0 else "")
+        )
+        unused_floating = floating - plan.floating_used(year)
+        if unused_floating:
+            lines.append(
+                f"  {unused_floating} floating holiday(s) unused; they expire on Dec 31"
+            )
+    else:
+        lines.append(
+            f"  {spent} of {granted} PTO day(s) used in {year}"
+            + (f", {granted - spent} left over" if granted - spent > 0 else "")
+        )
     if config.blackout:
         blocked = sum(1 for d in config.blackout if d.year == year)
         if blocked:
@@ -100,11 +117,16 @@ def _render_totals(plan: PtoPlan) -> List[str]:
     bridged = sum(b.length for b in plan.breaks)
     lines = ["Totals", _RULE]
     lines.append(f"  {len(plan.breaks)} break(s) of {plan.min_break}+ days, {bridged} days inside them")
-    lines.append(f"  {plan.total_pto} PTO day(s) spent for {days_off} total days off")
-    if plan.total_pto:
+    if plan.total_floating:
         lines.append(
-            f"  {days_off / plan.total_pto:.1f} days off per PTO day spent"
+            f"  {plan.total_pto} day(s) of leave spent for {days_off} total days off "
+            f"({plan.total_pto - plan.total_floating} PTO, {plan.total_floating} floating)"
         )
+    else:
+        lines.append(f"  {plan.total_pto} PTO day(s) spent for {days_off} total days off")
+    if plan.total_pto:
+        unit = "day of leave" if plan.total_floating else "PTO day"
+        lines.append(f"  {days_off / plan.total_pto:.1f} days off per {unit} spent")
     return lines
 
 
@@ -145,6 +167,7 @@ def render_json(
             "workweek": sorted(config.workweek),
             "observance": config.observance.value,
             "min_break": config.min_break,
+            "floating_days": config.floating_days,
             "holidays": config.holiday_names(),
             "blackout": sorted(d.isoformat() for d in config.blackout),
             "committed": sorted(d.isoformat() for d in config.committed),
@@ -182,7 +205,14 @@ def render_json(
             "min_break": plan.min_break,
             "pto_dates": [d.isoformat() for d in plan.pto_dates],
             "granted_by_year": {str(k): v for k, v in sorted(plan.granted_by_year.items())},
+            "floating_by_year": {str(k): v for k, v in sorted(plan.floating_by_year.items())},
             "spent_by_year": {str(k): v for k, v in sorted(plan.spent_by_year.items())},
+            "floating_used_by_year": {
+                str(year): plan.floating_used(year) for year in sorted(plan.granted_by_year)
+            },
+            "pto_used_by_year": {
+                str(year): plan.pto_used(year) for year in sorted(plan.granted_by_year)
+            },
             "total_days_off": plan.total_days_off,
             "breaks": [_break_json(b) for b in plan.breaks],
         }

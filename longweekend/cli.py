@@ -7,7 +7,7 @@ import datetime as dt
 import sys
 from typing import Dict, List, Optional, Sequence
 
-from .catalog import PRESETS, ResolvedHoliday, resolve_year
+from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
 from .config import CompanyConfig, build_config
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import render_ics, render_json, render_text
@@ -17,16 +17,21 @@ __all__ = ["main", "build_parser"]
 
 _EPILOG = """\
 holiday date forms (for --add and config files):
+  Good Friday             a holiday this tool knows; see --list-known
   Name=07-04              same month and day every year
   Name=2026-12-28         a one-off date in a single year
   Name=3rd MON in JAN     nth weekday of a month ('last' works too)
   Name=Thanksgiving+1     an offset from another holiday in the same set
+  Name=Easter-2           an offset from Easter Sunday
+  Name=TUE on or after 11-02   first weekday on or after a date
 
 examples:
   long-weekend                                  this year and next, US federal holidays
   long-weekend --preset corporate --pto 15      plan 15 PTO days a year
   long-weekend --preset federal --drop "Columbus Day" --add "Day After Thanksgiving=Thanksgiving+1"
   long-weekend --pto 20 --min-break 7           aim for week-long breaks
+  long-weekend --preset tech --pto 15 --floating 2     two floating holidays on top
+  long-weekend --add "Good Friday" --add "Election Day" --pto 15
   long-weekend --pto 15 --blackout 2026-04-01:2026-04-15 --commit 2026-07-20
   long-weekend --pto 15 --format ics > timeoff.ics
 """
@@ -100,6 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the budget for one year, e.g. --pto-year 2027=20 (repeatable)",
     )
     pto.add_argument(
+        "--floating", type=int, metavar="DAYS",
+        help=(
+            "floating holidays granted on top of the fixed ones: discretionary "
+            "days you place anywhere. They expire at the end of the calendar "
+            "year, so the planner spends them before touching PTO"
+        ),
+    )
+    pto.add_argument(
+        "--floating-year", action="append", default=[], metavar="YEAR=DAYS",
+        help="override the floating-holiday grant for one year (repeatable)",
+    )
+    pto.add_argument(
         "--carryover", type=int, metavar="DAYS",
         help="unused days that may roll into the next year (default: 0)",
     )
@@ -144,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-presets", action="store_true",
         help="show the built-in holiday sets and exit",
     )
+    output.add_argument(
+        "--list-known", action="store_true",
+        help="show every holiday that --add accepts by name, and exit",
+    )
 
     parser.add_argument(
         "--nonstandard", action="store_true",
@@ -183,12 +204,31 @@ def _list_presets() -> str:
     return "\n".join(lines)
 
 
+def _list_known() -> str:
+    lines = [
+        "Holidays you can add by name, e.g. --add \"Good Friday\":",
+        "",
+    ]
+    for name in sorted(KNOWN):
+        lines.append(f"  {name:<34} {KNOWN[name].describe()}")
+    lines.append("")
+    lines.append(
+        "Anything else takes a date: --add \"Founders Day=2nd FRI in MAY\". "
+        "Use --drop to remove\na holiday a preset included."
+    )
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.list_presets:
         print(_list_presets())
+        return 0
+
+    if args.list_known:
+        print(_list_known())
         return 0
 
     today = dt.date.today()
@@ -205,6 +245,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             observance=args.observance,
             pto=args.pto,
             pto_by_year=args.pto_year,
+            floating=args.floating,
+            floating_by_year=args.floating_year,
             carryover=args.carryover,
             min_break=args.min_break,
             max_consecutive_pto=args.max_consecutive_pto,
@@ -236,11 +278,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         opportunities_by_year.setdefault(opportunity.date.year, []).append(opportunity)
 
     plan: Optional[PtoPlan] = None
-    if config.pto_days is not None or config.pto_by_year:
+    if (
+        config.pto_days is not None
+        or config.pto_by_year
+        or config.floating_days is not None
+        or config.floating_by_year
+    ):
         budget = PtoBudget(
             per_year=dict(config.pto_by_year),
             default=config.pto_days or 0,
             carryover=config.carryover,
+            floating_per_year=dict(config.floating_by_year),
+            floating=config.floating_days or 0,
         )
         try:
             plan = optimize_pto(

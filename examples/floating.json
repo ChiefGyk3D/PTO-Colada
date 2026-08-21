@@ -1,0 +1,12 @@
+{
+  "name": "Initech (federal list, three floating days)",
+  "preset": "federal",
+  "drop": ["Columbus Day", "Veterans Day"],
+  "add": ["Day After Thanksgiving", "Christmas Eve"],
+  "workweek": "MON-FRI",
+  "observance": "nearest",
+  "pto_days": 15,
+  "floating_days": 3,
+  "carryover": 5,
+  "min_break": 4
+}

@@ -78,7 +78,40 @@ long-weekend --list-presets
 | `federal` (default) | All 11 US federal holidays, Juneteenth included |
 | `corporate` | What a generous private employer typically closes for |
 | `minimal` | The six almost every US employer observes |
+| `shutdown` | Closed from Christmas Eve through New Year's Day |
+| `everything` | Every holiday in the catalog, to `--drop` your way down from |
 | `standard`, `nonstandard` | The two lists the original script hard-coded |
+
+Presets are a starting point, not a claim about your employer. The federal list
+is the one the government and the banks keep; private employers diverge from it
+in both directions, and the ones they most often skip are Columbus Day and
+Veterans Day, while the ones they most often add are the day after Thanksgiving
+and Christmas Eve. (The [BLS National Compensation Survey holiday
+profiles](https://www.bls.gov/ebs/factsheets/holiday-profiles.htm) publish who
+actually gets which day.) That is what `--add` and `--drop` are for.
+
+### Adding a holiday by name
+
+Holidays the tool already knows can be added by name alone — no date needed:
+
+```
+long-weekend --list-known                        # the whole catalog
+long-weekend --add "Good Friday" --add "Election Day"
+long-weekend --preset minimal --add "Black Friday" --add "Christmas Eve"
+```
+
+The catalog covers the eleven federal holidays plus the days employers commonly
+bolt on: Good Friday, Easter Monday, Christmas Eve, New Year's Eve, the day
+after Thanksgiving, the day after Christmas, Election Day, and Indigenous
+Peoples' Day. Common aliases work too, so `--add "Black Friday"`, `--add "MLK
+Day"` and `--add "Washington's Birthday"` all land on the right rule.
+
+Two names for the same day are rejected rather than silently observed twice, so
+if you prefer Indigenous Peoples' Day, swap it in:
+
+```
+long-weekend --drop "Columbus Day" --add "Indigenous Peoples' Day"
+```
 
 Adjust a preset with `--add` and `--drop`:
 
@@ -92,18 +125,28 @@ long-weekend --preset federal \
 
 ### Holiday date forms
 
-`--add` and config files accept four forms:
+`--add` and config files accept a bare name from the catalog, or any of these
+forms:
 
 | Form | Meaning |
 | --- | --- |
+| `Good Friday` | A holiday the tool already knows (`--list-known`) |
 | `Name=07-04` | The same month and day every year |
 | `Name=2026-12-28` | A one-off date, e.g. an announced shutdown day |
 | `Name=3rd MON in JAN` | The nth weekday of a month (`last` also works) |
 | `Name=Thanksgiving+1` | An offset from another holiday in the same set |
+| `Name=Easter-2` | An offset from Easter Sunday |
+| `Name=TUE on or after 11-02` | The first given weekday on or after a date |
 
 The offset form is anchored to the other holiday's *actual* date, so
 "Day After Thanksgiving" is right in every year — including the years where the
 fourth Friday of November falls a week *before* the fourth Thursday.
+
+The Easter form covers the moving Christian holidays, computed with the
+Gregorian computus (Good Friday is `Easter-2`, Easter Monday `Easter+1`). The
+"on or after" form covers the holidays the nth-weekday rule cannot express —
+US Election Day is the Tuesday after the first Monday in November, which is
+exactly the first Tuesday on or after November 2.
 
 ### Weekend holidays
 
@@ -134,7 +177,8 @@ long-weekend --workweek MON,WED,FRI    # explicit days
 ### Config files
 
 For anything you would otherwise retype, use a JSON or YAML config. See
-[`examples/acme.json`](examples/acme.json) and
+[`examples/acme.json`](examples/acme.json),
+[`examples/floating.json`](examples/floating.json) and
 [`examples/four-day-week.yaml`](examples/four-day-week.yaml).
 
 ```jsonc
@@ -147,6 +191,8 @@ For anything you would otherwise retype, use a JSON or YAML config. See
   "observance": "nearest",
   "pto_days": 18,
   "pto_by_year": { "2027": 23 },
+  "floating_days": 2,
+  "floating_by_year": { "2027": 3 },
   "carryover": 5,
   "blackout": ["2026-09-28:2026-10-09"],
   "committed": ["2026-07-20:2026-07-24"]
@@ -169,6 +215,33 @@ long-weekend --pto 15
 long-weekend --pto 15 --pto-year 2027=20     # a different budget next year
 long-weekend --pto 15 --carryover 5          # unused days roll forward
 ```
+
+### Floating holidays
+
+Plenty of employers grant a few discretionary days on top of the fixed holiday
+list — often to cover the holidays their published list leaves out. They are not
+PTO: they are granted per calendar year, and they expire on December 31 rather
+than rolling over.
+
+```
+long-weekend --pto 15 --floating 2
+long-weekend --floating 3                    # floating days alone; no PTO
+long-weekend --pto 15 --floating 2 --floating-year 2027=3
+```
+
+The planner schedules both pools together, since a day off is a day off, but it
+spends **floating days first** — they are the ones that vanish at year end — and
+the report keeps the two apart so you can see what you actually drew down:
+
+```
+2026   15 PTO day(s) + 2 floating holiday(s) available
+...
+  17 of 17 day(s) used in 2026 (15 PTO, 2 floating)
+```
+
+Carryover follows from the same rule: only unused *PTO* can roll forward, so a
+year that ends with floating days on the table loses them no matter how generous
+`--carryover` is.
 
 The budget is **per calendar year**, which is how PTO normally works. Breaks are
 still allowed to span New Year — a Christmas-to-January trip draws from both

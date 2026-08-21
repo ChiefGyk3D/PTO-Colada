@@ -22,9 +22,14 @@ __all__ = [
     "NthWeekday",
     "RelativeTo",
     "ExplicitDate",
+    "EasterRelative",
+    "WeekdayOnOrAfter",
     "Rule",
     "ResolvedHoliday",
     "PRESETS",
+    "KNOWN",
+    "easter",
+    "known_holiday",
     "parse_rule",
     "parse_weekday",
     "parse_workweek",
@@ -162,7 +167,56 @@ class ExplicitDate:
         return self.date.isoformat()
 
 
-Rule = Union[FixedDate, NthWeekday, RelativeTo, ExplicitDate]
+@dataclass(frozen=True)
+class EasterRelative:
+    """A fixed offset from Easter Sunday, e.g. Good Friday is Easter - 2.
+
+    Western (Gregorian) Easter only; employers that observe the Orthodox date
+    can pin it with an explicit date per year.
+    """
+
+    name: str
+    offset: int
+
+    def actual(self, year: int, _resolved: Dict[str, dt.date]) -> Optional[dt.date]:
+        return easter(year) + dt.timedelta(days=self.offset)
+
+    def describe(self) -> str:
+        if self.offset == 0:
+            return "Easter Sunday"
+        sign = "+" if self.offset > 0 else "-"
+        return f"Easter {sign} {abs(self.offset)} day(s)"
+
+
+@dataclass(frozen=True)
+class WeekdayOnOrAfter:
+    """The first given weekday on or after a fixed month/day.
+
+    This is the shape of holidays that resist the nth-weekday rule, the
+    canonical one being US Election Day: the Tuesday after the first Monday in
+    November, which is exactly the first Tuesday on or after November 2.
+    """
+
+    name: str
+    month: int
+    day: int
+    weekday: int
+
+    def actual(self, year: int, _resolved: Dict[str, dt.date]) -> Optional[dt.date]:
+        try:
+            anchor = dt.date(year, self.month, self.day)
+        except ValueError:
+            return None
+        return anchor + dt.timedelta(days=(self.weekday - anchor.weekday()) % 7)
+
+    def describe(self) -> str:
+        return (
+            f"first {WEEKDAY_NAMES[self.weekday]} on or after "
+            f"{_calendar.month_name[self.month]} {self.day}"
+        )
+
+
+Rule = Union[FixedDate, NthWeekday, RelativeTo, ExplicitDate, EasterRelative, WeekdayOnOrAfter]
 
 
 @dataclass(frozen=True)
@@ -199,6 +253,21 @@ def nth_weekday(year: int, month: int, weekday: int, n: int) -> Optional[dt.date
     if not 1 <= day <= days_in_month:
         return None
     return dt.date(year, month, day)
+
+
+def easter(year: int) -> dt.date:
+    """Western (Gregorian) Easter Sunday, by the anonymous Gregorian computus."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return dt.date(year, month, day + 1)
 
 
 def observed_date(
@@ -349,6 +418,11 @@ _NTH_RE = re.compile(
 _ISO_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
 _MD_RE = re.compile(r"^(\d{1,2})[-/](\d{1,2})$")
 _REL_RE = re.compile(r"^(.+?)\s*([+-])\s*(\d+)$")
+_ONOR_RE = re.compile(
+    r"^(?:first\s+)?([a-z]+)\s+on\s+or\s+after\s+([a-z0-9]+)[-/\s]+(\d{1,2})$",
+    re.IGNORECASE,
+)
+_EASTER_NAMES = {"easter", "easter sunday"}
 
 
 def parse_rule(spec: str) -> Rule:
@@ -397,19 +471,33 @@ def _parse_when(name: str, when: str) -> Rule:
             n=ORDINALS[ordinal.upper()],
         )
 
+    match = _ONOR_RE.match(when)
+    if match:
+        weekday_name, month_text, day_text = match.groups()
+        month, day = parse_month(month_text), int(day_text)
+        _validate_month_day(name, month, day)
+        return WeekdayOnOrAfter(
+            name=name, month=month, day=day, weekday=parse_weekday(weekday_name)
+        )
+
+    if _normalize(when) in _EASTER_NAMES:
+        return EasterRelative(name=name, offset=0)
+
     match = _REL_RE.match(when)
     if match:
         anchor, sign, offset = match.groups()
         anchor = anchor.strip()
+        signed = int(offset) * (1 if sign == "+" else -1)
+        if _normalize(anchor) in _EASTER_NAMES:
+            return EasterRelative(name=name, offset=signed)
         if not anchor:
             raise ValueError(f"holiday {name!r}: relative spec {when!r} is missing an anchor")
-        return RelativeTo(
-            name=name, anchor=anchor, offset=int(offset) * (1 if sign == "+" else -1)
-        )
+        return RelativeTo(name=name, anchor=anchor, offset=signed)
 
     raise ValueError(
         f"holiday {name!r}: cannot parse date {when!r}. Expected 'MM-DD', "
-        "'YYYY-MM-DD', '3rd MON in JAN', or 'Anchor Holiday+1'."
+        "'YYYY-MM-DD', '3rd MON in JAN', 'Anchor Holiday+1', 'Easter-2', "
+        "or 'TUE on or after 11-02'."
     )
 
 
@@ -485,7 +573,12 @@ _THANKSGIVING = NthWeekday("Thanksgiving", 11, WEEKDAYS["THU"], 4)
 _DAY_AFTER_THANKSGIVING = RelativeTo("Day After Thanksgiving", "Thanksgiving", 1)
 _CHRISTMAS_EVE = FixedDate("Christmas Eve", 12, 24)
 _CHRISTMAS = FixedDate("Christmas Day", 12, 25)
+_BOXING_DAY = FixedDate("Day After Christmas", 12, 26)
 _NEW_YEARS_EVE = FixedDate("New Year's Eve", 12, 31)
+_GOOD_FRIDAY = EasterRelative("Good Friday", -2)
+_EASTER_MONDAY = EasterRelative("Easter Monday", 1)
+_ELECTION_DAY = WeekdayOnOrAfter("Election Day", 11, 2, WEEKDAYS["TUE"])
+_INDIGENOUS = NthWeekday("Indigenous Peoples' Day", 10, WEEKDAYS["MON"], 2)
 
 #: Named holiday sets. Start from the closest match and adjust with --add/--drop.
 PRESETS: Dict[str, List[Rule]] = {
@@ -513,4 +606,66 @@ PRESETS: Dict[str, List[Rule]] = {
         _NEW_YEAR, _MEMORIAL, _JULY_FOURTH, _LABOR, _THANKSGIVING,
         _DAY_AFTER_THANKSGIVING, _CHRISTMAS,
     ],
+    # Closed from Christmas Eve through New Year's Day. The days between are
+    # ordinary fixed dates, so a weekend inside the shutdown is not double-paid.
+    "shutdown": [
+        _NEW_YEAR, _MLK, _MEMORIAL, _JUNETEENTH, _JULY_FOURTH, _LABOR,
+        _THANKSGIVING, _DAY_AFTER_THANKSGIVING, _CHRISTMAS_EVE, _CHRISTMAS,
+        _BOXING_DAY, FixedDate("Winter Shutdown (Dec 27)", 12, 27),
+        FixedDate("Winter Shutdown (Dec 28)", 12, 28),
+        FixedDate("Winter Shutdown (Dec 29)", 12, 29),
+        FixedDate("Winter Shutdown (Dec 30)", 12, 30),
+        _NEW_YEARS_EVE,
+    ],
+    # Everything the engine knows about, for people who would rather start
+    # from the full list and --drop their way down.
+    "everything": [
+        _NEW_YEAR, _MLK, _PRESIDENTS, _GOOD_FRIDAY, _EASTER_MONDAY, _MEMORIAL,
+        _JUNETEENTH, _JULY_FOURTH, _LABOR, _COLUMBUS, _ELECTION_DAY, _VETERANS,
+        _THANKSGIVING, _DAY_AFTER_THANKSGIVING, _CHRISTMAS_EVE, _CHRISTMAS,
+        _BOXING_DAY, _NEW_YEARS_EVE,
+    ],
 }
+
+#: Holidays that can be added by name alone, e.g. ``--add "Good Friday"``.
+#: Employers mix and match these, so the catalog is deliberately wider than
+#: any one preset. Aliases (the second column) resolve to the same rule.
+KNOWN: Dict[str, Rule] = {
+    rule.name: rule
+    for rule in [
+        _NEW_YEAR, _MLK, _PRESIDENTS, _GOOD_FRIDAY, _EASTER_MONDAY, _MEMORIAL,
+        _JUNETEENTH, _JULY_FOURTH, _LABOR, _COLUMBUS, _INDIGENOUS, _ELECTION_DAY,
+        _VETERANS, _THANKSGIVING, _DAY_AFTER_THANKSGIVING, _CHRISTMAS_EVE,
+        _CHRISTMAS, _BOXING_DAY, _NEW_YEARS_EVE,
+    ]
+}
+
+_KNOWN_ALIASES: Dict[str, str] = {
+    "mlk day": "Martin Luther King Jr. Day",
+    "martin luther king day": "Martin Luther King Jr. Day",
+    "washington's birthday": "Presidents' Day",
+    "presidents day": "Presidents' Day",
+    "juneteenth national independence day": "Juneteenth",
+    "fourth of july": "Independence Day",
+    "july 4th": "Independence Day",
+    "black friday": "Day After Thanksgiving",
+    "thanksgiving day": "Thanksgiving",
+    "boxing day": "Day After Christmas",
+    "christmas": "Christmas Day",
+    "new years day": "New Year's Day",
+    "new years eve": "New Year's Eve",
+    "veterans' day": "Veterans Day",
+    "indigenous peoples day": "Indigenous Peoples' Day",
+    "columbus day / indigenous peoples' day": "Columbus Day",
+}
+
+_KNOWN_BY_KEY: Dict[str, Rule] = {_normalize(name): rule for name, rule in KNOWN.items()}
+
+
+def known_holiday(name: str) -> Optional[Rule]:
+    """Look a holiday up by name or alias, or return ``None`` if it is unknown."""
+    key = _normalize(name)
+    if key in _KNOWN_BY_KEY:
+        return _KNOWN_BY_KEY[key]
+    alias = _KNOWN_ALIASES.get(key)
+    return _KNOWN_BY_KEY[_normalize(alias)] if alias else None
