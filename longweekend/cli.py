@@ -7,7 +7,9 @@ import datetime as dt
 import sys
 from typing import Dict, List, Optional, Sequence
 
-from .catalog import PRESETS, ResolvedHoliday, resolve_year
+from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
+from .conferences import describe_catalog, load_conferences
+from .observances import describe_sets
 from .config import CompanyConfig, build_config
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import render_ics, render_json, render_text
@@ -17,16 +19,21 @@ __all__ = ["main", "build_parser"]
 
 _EPILOG = """\
 holiday date forms (for --add and config files):
+  Good Friday             a holiday this tool knows; see --list-known
   Name=07-04              same month and day every year
   Name=2026-12-28         a one-off date in a single year
   Name=3rd MON in JAN     nth weekday of a month ('last' works too)
   Name=Thanksgiving+1     an offset from another holiday in the same set
+  Name=Easter-2           an offset from Easter Sunday
+  Name=TUE on or after 11-02   first weekday on or after a date
 
 examples:
   long-weekend                                  this year and next, US federal holidays
   long-weekend --preset corporate --pto 15      plan 15 PTO days a year
   long-weekend --preset federal --drop "Columbus Day" --add "Day After Thanksgiving=Thanksgiving+1"
   long-weekend --pto 20 --min-break 7           aim for week-long breaks
+  long-weekend --preset tech --pto 15 --floating 2     two floating holidays on top
+  long-weekend --add "Good Friday" --add "Election Day" --pto 15
   long-weekend --pto 15 --blackout 2026-04-01:2026-04-15 --commit 2026-07-20
   long-weekend --pto 15 --format ics > timeoff.ics
 """
@@ -100,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the budget for one year, e.g. --pto-year 2027=20 (repeatable)",
     )
     pto.add_argument(
+        "--floating", type=int, metavar="DAYS",
+        help=(
+            "floating holidays granted on top of the fixed ones: discretionary "
+            "days you place anywhere. They expire at the end of the calendar "
+            "year, so the planner spends them before touching PTO"
+        ),
+    )
+    pto.add_argument(
+        "--floating-year", action="append", default=[], metavar="YEAR=DAYS",
+        help="override the floating-holiday grant for one year (repeatable)",
+    )
+    pto.add_argument(
         "--carryover", type=int, metavar="DAYS",
         help="unused days that may roll into the next year (default: 0)",
     )
@@ -131,6 +150,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="PTO you have already booked; charged to the budget (repeatable)",
     )
 
+    personal = parser.add_argument_group("days you take off yourself")
+    personal.add_argument(
+        "--observe", action="append", default=[], metavar="WHAT",
+        help=(
+            "days you will take off regardless: a set such as 'jewish', a "
+            "holiday name such as \"Yom Kippur\" or \"Passover\", or a date. "
+            "Charged to your budget, and the planner builds around them "
+            "(repeatable). See --list-observances"
+        ),
+    )
+    personal.add_argument(
+        "--israel", action="store_true",
+        help="use the Israeli festival calendar (no second diaspora day)",
+    )
+    personal.add_argument(
+        "--erev", action="store_true",
+        help="also take the day each Jewish holiday begins on, since it starts at sunset",
+    )
+    personal.add_argument(
+        "--conference", action="append", default=[], metavar="NAME",
+        help=(
+            "take a security conference off, e.g. --conference \"DEF CON\" "
+            "(repeatable). See --list-conferences"
+        ),
+    )
+    personal.add_argument(
+        "--conference-travel", type=int, default=0, metavar="DAYS",
+        help="days either side of a conference for travel (default: 0)",
+    )
+    personal.add_argument(
+        "--conferences", dest="conference_file", metavar="PATH",
+        help="your own conference JSON, overriding or extending the bundled catalog",
+    )
+
     output = parser.add_argument_group("output")
     output.add_argument(
         "--format", choices=("text", "json", "ics"), default="text",
@@ -143,6 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
     output.add_argument(
         "--list-presets", action="store_true",
         help="show the built-in holiday sets and exit",
+    )
+    output.add_argument(
+        "--list-known", action="store_true",
+        help="show every holiday that --add accepts by name, and exit",
+    )
+    output.add_argument(
+        "--list-observances", action="store_true",
+        help="show what --observe accepts, and exit",
+    )
+    output.add_argument(
+        "--list-conferences", action="store_true",
+        help="show the conference catalog and its dates, and exit",
+    )
+    output.add_argument(
+        "--interactive", "-i", action="store_true",
+        help="answer a few questions instead of remembering flags",
     )
 
     parser.add_argument(
@@ -183,6 +252,21 @@ def _list_presets() -> str:
     return "\n".join(lines)
 
 
+def _list_known() -> str:
+    lines = [
+        "Holidays you can add by name, e.g. --add \"Good Friday\":",
+        "",
+    ]
+    for name in sorted(KNOWN):
+        lines.append(f"  {name:<34} {KNOWN[name].describe()}")
+    lines.append("")
+    lines.append(
+        "Anything else takes a date: --add \"Founders Day=2nd FRI in MAY\". "
+        "Use --drop to remove\na holiday a preset included."
+    )
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -191,7 +275,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(_list_presets())
         return 0
 
+    if args.list_known:
+        print(_list_known())
+        return 0
+
+    if args.list_observances:
+        print(describe_sets())
+        return 0
+
     today = dt.date.today()
+
+    if args.list_conferences:
+        try:
+            catalog = load_conferences(args.conference_file)
+        except (ValueError, FileNotFoundError) as exc:
+            parser.error(str(exc))
+            return 2  # pragma: no cover - parser.error exits
+        print(describe_catalog(catalog, [today.year, today.year + 1, today.year + 2]))
+        return 0
+
+    if args.interactive:
+        from .wizard import run_wizard
+
+        argv = run_wizard(args)
+        if argv is None:
+            return 1
+        args = parser.parse_args(argv)
+
     preset = "nonstandard" if args.nonstandard and args.preset == "federal" else args.preset
 
     try:
@@ -205,11 +315,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             observance=args.observance,
             pto=args.pto,
             pto_by_year=args.pto_year,
+            floating=args.floating,
+            floating_by_year=args.floating_year,
             carryover=args.carryover,
             min_break=args.min_break,
             max_consecutive_pto=args.max_consecutive_pto,
             blackout=args.blackout,
             committed=args.committed,
+            observe=args.observe,
+            conferences=args.conference,
+            conference_file=args.conference_file,
+            conference_travel=args.conference_travel,
+            years=range(start_year, end_year + 1),
+            diaspora=not args.israel,
+            include_erev=args.erev,
         )
     except (ValueError, FileNotFoundError) as exc:
         parser.error(str(exc))
@@ -236,11 +355,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         opportunities_by_year.setdefault(opportunity.date.year, []).append(opportunity)
 
     plan: Optional[PtoPlan] = None
-    if config.pto_days is not None or config.pto_by_year:
+    if (
+        config.pto_days is not None
+        or config.pto_by_year
+        or config.floating_days is not None
+        or config.floating_by_year
+    ):
         budget = PtoBudget(
             per_year=dict(config.pto_by_year),
             default=config.pto_days or 0,
             carryover=config.carryover,
+            floating_per_year=dict(config.floating_by_year),
+            floating=config.floating_days or 0,
         )
         try:
             plan = optimize_pto(

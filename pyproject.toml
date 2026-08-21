@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "long-weekend-planner"
-version = "1.0.0"
+version = "1.1.0"
 description = "Find long weekends and plan PTO around the holidays your employer actually observes."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -27,6 +27,11 @@ long-weekend = "longweekend.cli:main"
 
 [tool.setuptools]
 packages = ["longweekend"]
+
+# The conference catalog is data, not code, so it needs saying explicitly --
+# otherwise it survives an editable install and vanishes from a wheel.
+[tool.setuptools.package-data]
+longweekend = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
