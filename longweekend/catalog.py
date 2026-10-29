@@ -532,9 +532,24 @@ def _parse_when(name: str, when: str) -> Rule:
 MAX_FILE_INTEGER = 1_000_000
 
 
+_PLAIN_DECIMAL = re.compile(r"[-+]?(?:0|[1-9][0-9]{0,17})")
+
+
 def whole_number(value: object, label: str) -> int:
-    """A whole number from a config file; null, booleans, text, fractions and
-    non-finite or absurdly large values are errors."""
+    """A whole number from a config file.
+
+    Accepts an int, a whole-valued float, or a string of plain decimal digits
+    (optional sign, ASCII digits, at most 18; nothing is trimmed). Null,
+    booleans, any other text, fractions, non-finite and absurdly large values
+    are errors.
+    """
+    if isinstance(value, str):
+        if not _PLAIN_DECIMAL.fullmatch(value):
+            raise ValueError(
+                f"{label} must be a whole number written as plain digits, like 15; "
+                f"write the number in plain decimal (got {value!r})"
+            )
+        value = int(value)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{label} must be a whole number (got {value!r})")
     if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):

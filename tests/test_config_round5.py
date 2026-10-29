@@ -135,12 +135,14 @@ def test_every_key_with_every_wrong_type_is_clean(tmp_path, capsys, key, kind):
         # A containers, a boolean or a null is never a valid value for any key;
         # only plain numbers and text can be (an int for an integer key, say).
         assert code == 0
-        assert kind in {"int", "float", "string"}, (key, kind)
+        # null is an empty list for the list-valued keys (round 6)
+        empty_list_ok = kind == "null" and key in {"add", "drop", "blackout", "committed", "prefer"}
+        assert kind in {"int", "float", "string"} or empty_list_ok, (key, kind)
         capsys.readouterr()
 
 
 class TestAddEntries:
-    @pytest.mark.parametrize("value", [1, [1], True, None, [None], ["Good Friday", 7]])
+    @pytest.mark.parametrize("value", [1, [1], True, [None], ["Good Friday", 7]])
     def test_bad_add_values(self, tmp_path, value):
         path = write(tmp_path, {"holidays": HOL, "add": value})
         with pytest.raises(ValueError) as exc:

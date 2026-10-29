@@ -156,8 +156,8 @@ def test_goal_json_labels_the_headline(capsys):
 
 
 @pytest.mark.parametrize("key,value", [
-    ("min_vacation_days", None), ("min_vacation_days", True), ("min_vacation_days", "7"),
-    ("min_vacation_days", 7.5), ("max_breaks", "x"), ("max_breaks", None),
+    ("min_vacation_days", True), ("min_vacation_days", "x7"),
+    ("min_vacation_days", 7.5), ("max_breaks", "x"),
     ("max_breaks", False), ("max_breaks", 2.5), ("max_breaks", [3]),
 ])
 def test_bad_integer_keys_are_clean_errors(tmp_path, capsys, key, value):
@@ -165,6 +165,14 @@ def test_bad_integer_keys_are_clean_errors(tmp_path, capsys, key, value):
                             "holidays": [{"name": "X", "date": "2027-03-03"}]})
     err = cli(capsys, "--config", path, expect=2)
     assert key in err and "whole number" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize("key", ["min_vacation_days", "max_breaks"])
+def test_empty_integer_keys_say_what_to_do(tmp_path, capsys, key):
+    path = write(tmp_path, {"pto_days": 3, key: None,
+                            "holidays": [{"name": "X", "date": "2027-03-03"}]})
+    err = cli(capsys, "--config", path, expect=2)
+    assert f"{key!r} is empty; delete the line or give it a value" in err
 
 
 def test_goal_must_be_text(tmp_path, capsys):

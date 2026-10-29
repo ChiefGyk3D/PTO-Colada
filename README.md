@@ -206,16 +206,28 @@ For anything you would otherwise retype, use a JSON or YAML config. See
 Use `holidays` instead of `preset` to define the whole set from scratch.
 Command-line flags override whatever the file says.
 
-Config files are small by design: at most 64 KiB, 10,000 values and 16 levels
-of nesting. They must be regular files. Duplicate keys, YAML aliases (`&x`,
-`*x`) and merge keys (`<<`) are errors, as are year keys that repeat in
-different spellings (`"2027"` and `2027`). Numbers are written in plain decimal
-(`17`, not `010`, `0x11` or `1:20`); text, fractions, infinity and huge values
-are rejected with a message naming the key.
+Config files are small by design: at most 64 KiB, 10,000 nodes and 16 levels
+of nesting. A node is any mapping, list, key or value, so a flat list of 9,990
+numbers fits and a mapping of 5,000 pairs does not. They must be regular files
+(a leading byte-order mark is fine). Duplicate keys, YAML aliases (`&x`, `*x`)
+and merge keys (`<<`) are errors, as are year keys that repeat in different
+spellings (`"2027"` and `2027`).
+
+Whole numbers are written in plain decimal: `17` or `"17"`, with an optional
+sign. Quoting is fine, but nothing else is: `010`, `0x11`, `1:20`, `1_5`,
+`1.5e1`, fullwidth digits, blanks, fractions, infinity and huge values are
+rejected with a message that names the key. A number cannot have more than 18
+digits. A `name` may be text or a plain integer; write it in quotes if YAML
+would read it as something else (`name: "no"`, since YAML treats yes, no, on
+and off as booleans).
+
 Date lists (`--blackout`, `--commit`, `--prefer` and the matching file keys) take
 years 1900 to 2200, ranges of at most 3,660 days, and at most 20,000 days per
-option. A key set to null, or to the wrong kind of value, is an error; delete the
-key instead. Config errors may quote the value you wrote and the file's path; do not paste
+option. An empty `add`, `drop`, `blackout`, `committed` or `prefer` (a key with
+nothing after it) means an empty list. Any other key left empty, or given the
+wrong kind of value, is an error that says to delete the line or give it a
+value.
+Config errors may quote the value you wrote and the file's path; do not paste
 them into public places if the file holds private data.
 
 ```

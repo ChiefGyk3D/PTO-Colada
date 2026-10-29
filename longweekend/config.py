@@ -271,13 +271,17 @@ def _read_regular_file(path: str) -> bytes:
     return data
 
 
+class _HugeNumber:
+    """Stands in for a JSON integer with too many digits until its location is known."""
+
+
 def _json_hooks(path: str):
     """``json.loads`` keyword arguments that refuse over-long integers (NaN and
     infinity parse as floats and are rejected by name where a number is read)."""
 
-    def parse_int(text: str) -> int:
+    def parse_int(text: str):
         if len(text.lstrip("-")) > _MAX_INT_DIGITS:
-            raise ValueError(f"{path}: a number with too many digits")
+            return _HugeNumber()  # reported with its key path by _check_text
         return int(text)
 
     return {
@@ -454,7 +458,7 @@ def load_config_file(path: str) -> Dict[str, object]:
     """
     raw = _read_regular_file(path)
     try:
-        text = raw.decode("utf-8")
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise ValueError(f"{path} is not valid UTF-8 text") from None
 
@@ -709,9 +713,40 @@ def _default_years() -> List[int]:
     return [this_year, this_year + 1]
 
 
+#: Keys where an empty value (null) means the same as an empty list.
+_EMPTY_LIST_KEYS = ("add", "drop", "blackout", "committed", "prefer")
+_FILE_KEYS = _EMPTY_LIST_KEYS + (
+    "name", "preset", "holidays", "workweek", "observance", "pto_days", "pto_by_year",
+    "floating_days", "floating_by_year", "carryover", "min_break", "goal",
+    "min_vacation_days", "max_breaks", "max_consecutive_pto", "min_return",
+    "target_days_off", "conference_travel",
+)
+
+
+def _name(value: object, path: str) -> str:
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{path}: 'name' was read as a YAML boolean ({str(value).lower()}); YAML treats "
+            'yes, no, on and off as booleans, so write it in quotes, name: "no"'
+        )
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{path}: 'name' must be text; write it in quotes, name: \"2027\" (got {value!r})")
+
+
 def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> None:
+    data = dict(data)
+    for key in _FILE_KEYS:
+        if key in data and data[key] is None:
+            if key in _EMPTY_LIST_KEYS:
+                del data[key]  # an empty list
+            else:
+                raise ValueError(f"{path}: {key!r} is empty; delete the line or give it a value")
+
     if "name" in data:
-        config.name = _text(data["name"], "name", path)
+        config.name = _name(data["name"], path)
 
     if "preset" in data:
         base = _text(data["preset"], "preset", path)
@@ -726,13 +761,16 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         if not isinstance(entries, list):
             raise ValueError(f"{path}: 'holidays' must be a list")
         rules: List[Rule] = []
-        for entry in entries:
-            if isinstance(entry, str):
-                rules.append(rule_from_spec(entry))
-            elif isinstance(entry, dict):
-                rules.append(rule_from_mapping(entry))
-            else:
-                raise ValueError(f"{path}: holiday entries must be strings or mappings, got {entry!r}")
+        for position, entry in enumerate(entries, start=1):
+            try:
+                if isinstance(entry, str):
+                    rules.append(rule_from_spec(entry))
+                elif isinstance(entry, dict):
+                    rules.append(rule_from_mapping(entry))
+                else:
+                    raise ValueError(f"holiday entries must be strings or mappings, got {entry!r}")
+            except ValueError as exc:
+                raise ValueError(f"{path}: 'holidays' entry {position}: {exc}") from None
         # 'holidays' replaces the preset; use 'add'/'drop' to amend one instead.
         config.holidays = rules
 
@@ -823,6 +861,8 @@ def _check_text(data: object, path: str) -> None:
     stack = [(data, "the top level")]
     while stack:
         item, where = stack.pop()
+        if isinstance(item, _HugeNumber):
+            raise ValueError(f"{path}: the number at {where} has too many digits")
         if isinstance(item, str):
             try:
                 item.encode("utf-8")
@@ -860,16 +900,11 @@ def _file_number(value: object, key: str, path: str) -> float:
 
 
 def _file_int(value: object, key: str, path: str) -> int:
-    """A whole number from a config file.
+    """A whole number from a config file; see :func:`whole_number` for what is accepted.
 
-    Null, booleans, text (including YAML 1.1 forms such as 010 or 1:20),
-    fractions, nan, infinity and absurdly large values are errors.
+    YAML 1.1 forms such as 010 or 1:20 arrive as text and are rejected with a
+    message that says to write plain digits.
     """
-    if isinstance(value, str):
-        raise ValueError(
-            f"{path}: {key!r} must be a whole number written in plain decimal, "
-            f"like 17 (got {value!r})"
-        )
     return whole_number(value, f"{path}: {key!r}")
 
 

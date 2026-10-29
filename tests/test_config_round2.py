@@ -146,7 +146,7 @@ INT_KEYS = ["pto_days", "floating_days", "carryover", "min_break", "max_consecut
 class TestNumbers:
     @pytest.mark.parametrize("key", INT_KEYS)
     @pytest.mark.parametrize("raw", ["1e309", "-1e309", "NaN", "Infinity", "true", "null",
-                                     '"7"', "2.5", "[1]", "1" + "0" * 400])
+                                     '"010"', "2.5", "[1]", "1" + "0" * 400])
     def test_json_numbers_are_clean_errors(self, tmp_path, key, raw):
         path = write(tmp_path, '{"holidays": [{"name": "X", "date": "2027-03-03"}], "%s": %s}' % (key, raw))
         message = error_of(path)
