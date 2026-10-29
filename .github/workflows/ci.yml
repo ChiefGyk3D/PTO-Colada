@@ -1,38 +1,86 @@
+# Lint, tests on Python 3.8-3.13, a CLI smoke test, and the shared security
+# checks. The jobs live in ChiefGyk3D/git-your-ship-together; this file only
+# says what is specific to Long Weekend Planner. `CI green` at the end is the
+# one check to require in branch protection.
 name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+  schedule:
+    # Weekly, Monday 06:00 UTC, so new advisories surface between commits
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    # Pinned rather than ubuntu-latest: the setup-python manifest only ships
-    # 3.8/3.9 builds up to 24.04, so the oldest supported interpreters stop
-    # being installable the day ubuntu-latest moves on.
+  ci:
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-ci.yml@6f40107c2e05483f485452991e422f7f63886000 # v1.25.1
+    permissions:
+      contents: read
+      id-token: write   # Doppler OIDC, declared by the shared workflow's coverage upload
+    secrets:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}   # optional Service Token fallback; unset means OIDC only
+    with:
+      # The oldest supported interpreters (3.8, 3.9) need ubuntu-24.04 or older;
+      # the shared workflow's default runner list is exactly that.
+      python-versions: '["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]'
+      coverage-python-version: "3.13"
+      lint-python-version: "3.13"
+      install-command: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+      test-command: pytest -q
+      # Correctness-only lint (syntax errors, undefined names, invalid
+      # comparisons). Ruff's broader default set reports ~290 findings on code
+      # that predates this lint; widening it is tracked as a follow-up.
+      lint-command: ruff check --select E9,F63,F7,F82 .
+      # Repo-specific: every CLI entry point must run end to end.
+      smoke-install-command: pip install ".[yaml]"
+      smoke-command: |
+        python holiday.py --years 1
+        python -m longweekend.cli --pto 15 --format json > /dev/null
+        python -m longweekend.cli --pto 15 --format ics > /dev/null
+        python -m longweekend.cli --list-known > /dev/null
+        python -m longweekend.cli --list-observances > /dev/null
+        python -m longweekend.cli --list-conferences > /dev/null
+        python -m longweekend.cli --pto 15 --observe jewish --years 1 > /dev/null
+        python -m longweekend.cli --pto 15 --conference "DEF CON" --years 1 > /dev/null
+      docker-build: false   # no Dockerfile in this repository
+
+  security:
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/security.yml@6f40107c2e05483f485452991e422f7f63886000 # v1.25.1
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      id-token: write
+    secrets:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}   # optional Service Token fallback; unset means OIDC only
+
+  ci-green:
+    name: CI green
+    if: always()
+    needs: [ci, security]
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+    timeout-minutes: 5
+    permissions: {}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install
+      - name: Every job must have succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Test
-        run: pytest -q
-      - name: Check the CLI runs
-        run: |
-          python holiday.py --years 1
-          python -m longweekend.cli --pto 15 --format json > /dev/null
-          python -m longweekend.cli --pto 15 --format ics > /dev/null
-          python -m longweekend.cli --list-known > /dev/null
-          python -m longweekend.cli --list-observances > /dev/null
-          python -m longweekend.cli --list-conferences > /dev/null
-          python -m longweekend.cli --pto 15 --observe jewish --years 1 > /dev/null
-          python -m longweekend.cli --pto 15 --conference "DEF CON" --years 1 > /dev/null
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != success ]; then
+              echo "::error::a required job ended as '$r'"
+              exit 1
+            fi
+          done
