@@ -495,6 +495,8 @@ The `.ics` file contains an all-day event for every holiday, every planned PTO
 day, and every resulting break, so you can import the plan straight into a
 calendar. Add `--no-holidays` to export only the PTO days and breaks.
 
+Note: event UIDs in `.ics` exports changed once (SHA-1 to SHA-256); re-importing an older export will not match the new events.
+
 ## Using it as a library
 
 ```python

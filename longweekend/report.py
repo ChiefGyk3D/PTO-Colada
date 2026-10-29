@@ -532,7 +532,7 @@ def _event(
     transparent: bool = False,
 ) -> List[str]:
     seed = f"{category}|{start.isoformat()}|{end.isoformat()}|{summary}"
-    uid = hashlib.sha1(seed.encode("utf-8")).hexdigest()  # noqa: S324 - identity only, not security
+    uid = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:40]
     return [
         "BEGIN:VEVENT",
         f"UID:{uid}@long-weekend-planner",
