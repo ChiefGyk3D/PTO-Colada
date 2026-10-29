@@ -24,6 +24,7 @@ from .conferences import (
     load_conferences,
     occurrences_for,
 )
+from . import islamic
 from .observances import PersonalDay, resolve_observances
 from .catalog import (
     DEFAULT_WORKWEEK,
@@ -90,6 +91,9 @@ class CompanyConfig:
     #: into ``committed``; kept separately so the report can say what each one
     #: was and what it cost.
     observances: List[PersonalDay] = field(default_factory=list)
+    #: Announced dates for Muslim holidays, from the config file's
+    #: ``observances`` mapping: canonical holiday name -> dates.
+    observance_dates: Dict[str, List[dt.date]] = field(default_factory=dict)
     conferences: List[ConferenceOccurrence] = field(default_factory=list)
     #: Days taken either side of a conference to travel.
     conference_travel: int = 0
@@ -534,6 +538,7 @@ def build_config(
     years: Sequence[int] = (),
     diaspora: bool = True,
     include_erev: bool = False,
+    muslim_shift: int = 0,
 ) -> CompanyConfig:
     """Layer preset, config file and CLI overrides into one configuration."""
     if preset not in PRESETS:
@@ -603,11 +608,23 @@ def build_config(
     if conference_travel:
         config.conference_travel = conference_travel
 
-    if observe:
+    muslim_shift = islamic.check_shift(muslim_shift)
+    if observe or config.observance_dates:
         config.observances = resolve_observances(
-            observe, years or _default_years(), diaspora=diaspora, include_erev=include_erev
+            observe,
+            years or _default_years(),
+            diaspora=diaspora,
+            include_erev=include_erev,
+            shift=muslim_shift,
+            overrides=config.observance_dates,
         )
         config.committed |= {o.date for o in config.observances}
+
+    if muslim_shift and not any(o.source == "muslim" for o in config.observances):
+        raise ValueError(
+            "the shift moves Muslim holidays, and none are selected; "
+            "add --observe muslim (or a holiday name such as \"Eid al-Fitr\")"
+        )
 
     if conferences:
         catalog = load_conferences(conference_file)
@@ -719,7 +736,7 @@ _FILE_KEYS = _EMPTY_LIST_KEYS + (
     "name", "preset", "holidays", "workweek", "observance", "pto_days", "pto_by_year",
     "floating_days", "floating_by_year", "carryover", "min_break", "goal",
     "min_vacation_days", "max_breaks", "max_consecutive_pto", "min_return",
-    "target_days_off", "conference_travel",
+    "target_days_off", "conference_travel", "observances",
 )
 
 
@@ -821,10 +838,78 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.target_days_off = _file_int(data["target_days_off"], "target_days_off", path)
     if "conference_travel" in data:
         config.conference_travel = _file_int(data["conference_travel"], "conference_travel", path)
+    if "observances" in data:
+        config.observance_dates = _observance_dates(data["observances"], path)
     if "blackout" in data:
         config.blackout |= parse_date_ranges(_text_list(data["blackout"], "blackout", path), "blackout")
     if "committed" in data:
         config.committed |= parse_date_ranges(_text_list(data["committed"], "committed", path), "committed")
+
+
+#: Most holidays, and most dates per holiday, an ``observances`` mapping may name.
+MAX_OBSERVANCE_ENTRIES = 32
+MAX_OBSERVANCE_DATES = 8
+_MAX_OBSERVANCE_NAME = 64
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _observance_dates(raw: object, path: str) -> Dict[str, List[dt.date]]:
+    """``{holiday name: date or dates}`` for announced Muslim holiday dates.
+
+    Names must be Muslim holidays this program knows; dates are strict
+    ``YYYY-MM-DD`` text (ASCII digits only) in 1900 to 2200. How close a date
+    must be to the calendar's is checked when the holidays are resolved.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{path}: 'observances' must be a mapping of holiday name to date, "
+            'e.g. observances: {"Eid al-Fitr": "2027-03-09"}'
+        )
+    if len(raw) > MAX_OBSERVANCE_ENTRIES:
+        raise ValueError(
+            f"{path}: 'observances' names {len(raw)} holidays; at most "
+            f"{MAX_OBSERVANCE_ENTRIES} are accepted"
+        )
+    result: Dict[str, List[dt.date]] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or len(key) > _MAX_OBSERVANCE_NAME:
+            raise ValueError(
+                f"{path}: 'observances' has a holiday name that is not short text: "
+                f"{str(key)[:40]!r}"
+            )
+        name = islamic.canonical_name(key)
+        if name is None:
+            raise ValueError(
+                f"{path}: 'observances' entry {key!r} is not a Muslim holiday name; use one of: "
+                + ", ".join(islamic.HOLIDAY_NAMES)
+            )
+        if name in result:
+            raise ValueError(f"{path}: 'observances' names {name} more than once")
+        items = value if isinstance(value, list) else [value]
+        if not items or len(items) > MAX_OBSERVANCE_DATES:
+            raise ValueError(
+                f"{path}: 'observances' {key!r} needs between 1 and "
+                f"{MAX_OBSERVANCE_DATES} dates"
+            )
+        dates: List[dt.date] = []
+        for item in items:
+            if not isinstance(item, str) or not _ISO_DATE.fullmatch(item):
+                raise ValueError(
+                    f"{path}: 'observances' {key!r} must be YYYY-MM-DD dates in quotes "
+                    f"(got {str(item)[:40]!r})"
+                )
+            try:
+                date = dt.date.fromisoformat(item)
+            except ValueError:
+                raise ValueError(f"{path}: 'observances' {key!r}: {item!r} is not a real date") from None
+            if not _MIN_YEAR <= date.year <= _MAX_YEAR:
+                raise ValueError(
+                    f"{path}: 'observances' {key!r}: {item} is outside the years "
+                    f"{_MIN_YEAR} to {_MAX_YEAR}"
+                )
+            dates.append(date)
+        result[name] = dates
+    return result
 
 
 def _text(value: object, key: str, path: str) -> str:

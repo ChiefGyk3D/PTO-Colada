@@ -35,8 +35,16 @@ corporate - 12 holidays, Mon-Fri workweek, nearest working day observance
 ```
 
 It also knows the days you take off yourself — Jewish holidays off a real
-Hebrew calendar, security conferences off a catalog you can extend — and plans
+Hebrew calendar, Muslim holidays off an estimated Islamic one (both opt-in), security conferences off a catalog you can extend — and plans
 the rest of your leave around them.
+
+> **Which week it assumes.** PTO Colada is built primarily around a Monday to
+> Friday workweek, and that is the default. Other schedules work through
+> `--workweek` (or the `workweek` config key): `--workweek SUN-THU` for a
+> Sunday to Thursday week, `--workweek MON-THU` for a four-day week. One
+> schedule it cannot express is a rotating one (a weekend that moves from week
+> to week); see [Non-standard workweeks](#non-standard-workweeks) for the
+> limits.
 
 ## Install
 
@@ -216,6 +224,15 @@ long-weekend --workweek SUN-THU        # Sunday to Thursday
 long-weekend --workweek MON-THU        # four-day week
 long-weekend --workweek MON,WED,FRI    # explicit days
 ```
+
+The workweek is one fixed set of weekdays, the same every week. That covers a
+Sunday to Thursday week (the weekend is Friday and Saturday) and a four-day
+week (the weekend is Friday to Sunday). It does **not** cover a rotating
+schedule, such as a weekend that falls on different days in alternating weeks,
+or a shift pattern like four on and three off: there is no way to say "this
+week is different from that one", so those weeks cannot be planned correctly.
+For a rotating schedule, pick the workweek that matches most weeks and mark the
+exceptions yourself with `--commit` and `--blackout`.
 
 ### Config files
 
@@ -628,6 +645,72 @@ A Hebrew day starts at sunset, so every holiday actually begins the evening
 before the date shown. `--erev` books that day too — and only for the *first*
 day of a festival, since the evening before day two is day one, which you have
 already booked.
+
+### Muslim holidays
+
+Muslim holidays are opt-in, like the Jewish ones, and work the same way:
+
+```
+long-weekend --pto 15 --observe muslim
+long-weekend --pto 15 --observe "Eid al-Fitr" --observe "Eid al-Adha"
+long-weekend --pto 15 --observe jewish --observe muslim   # both sets, if both apply
+```
+
+| Set | What it books |
+| --- | --- |
+| `muslim` | Eid al-Fitr and Eid al-Adha |
+| `muslim-all` | the above plus Islamic New Year, Ashura, Mawlid, Isra and Mi'raj, the first day of Ramadan and Laylat al-Qadr |
+
+You can also name one holiday: `Eid al-Fitr`, `Eid al-Adha`, `Islamic New Year`
+(or `Muharram`), `Ashura`, `Mawlid`, `Isra and Mi'raj`, `Ramadan` (its first day)
+and `Laylat al-Qadr` (or `Night of Power`). Each is one day. Laylat al-Qadr is a
+night, so the day booked is the day after the night of the 27th of Ramadan; use
+`--observe YYYY-MM-DD` for any other day you want.
+
+**These dates are estimates, and the output says so.** Islamic months begin
+when the new moon is sighted, which varies by country and is only known a day
+or so ahead. The planner uses the *tabular* (arithmetic) Islamic calendar in
+[`longweekend/islamic.py`](longweekend/islamic.py): pure standard library, 30
+year cycle, no tables. Checked against the Umm al-Qura calendar of Saudi Arabia
+for all 42 holiday dates from 2026 to 2030, the tabular date was the same day
+(23 times) or one day later (19 times), never earlier. Published sources also
+disagree with each other by a day (Wikipedia gives 3 February 2030 for Eid
+al-Fitr, Umm al-Qura 4 February). **Plan for a margin of 1 to 2 days either
+way.** Every Muslim date is marked `PROVISIONAL` in the text, JSON and
+calendar output, the same way an unconfirmed employer holiday is, and stays
+that way until you enter the announced date.
+
+When the date is announced, set it in a config file:
+
+```yaml
+observances:
+  Eid al-Fitr: "2027-03-09"
+  "First day of Ramadan": ["2030-01-05", "2030-12-25"]   # falls twice in 2030
+```
+
+An entered date replaces the computed one and is no longer provisional. Names
+are matched the way `--observe` matches them. The date must be within 3 days of
+the calendar's own (a bigger gap is treated as a typo), at most 8 dates per
+holiday and 32 holidays are read, and dates must be quoted `YYYY-MM-DD` text.
+If you do not know the announced date but know your local sighting runs a day
+behind or ahead, `--shift N` (from -3 to 3) moves every computed Muslim date;
+dates you entered in the config are not moved.
+
+A Hijri year is about 11 days shorter than a Gregorian one, so a holiday can
+fall **twice in one Gregorian year**: the first day of Ramadan on 6 January and
+26 December 2030, Eid al-Fitr on 3 January and 23 December 2033. Both are
+returned and booked. `--erev` and `--israel` apply to Jewish holidays only.
+
+**Verification.** Reference dates: the AlAdhan API
+(`https://api.aladhan.com/v1/hToG/DD-MM-YYYY`, method `HJCoSA`, the Hijri
+calendar of Saudi Arabia, i.e. Umm al-Qura), fetched 2026-10-29, for the eight
+holidays in each of 2026 to 2030; cross-checked against Wikipedia's "Eid
+al-Fitr" article for that holiday. These are verified in
+[`tests/test_islamic.py`](tests/test_islamic.py). Which Hijri day each holiday
+is on (27 Rajab, 12 Rabi I, 27 Ramadan and so on) is the common convention and
+is inferred, not taken from a fetched source. Traditions differ on some (for
+example Mawlid is 12 Rabi I for most Sunni communities and 17 for many Shia
+communities); use a config date for yours.
 
 ### Security conferences
 

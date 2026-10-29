@@ -276,8 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     personal.add_argument(
         "--observe", action="append", default=[], metavar="WHAT",
         help=(
-            "days you will take off regardless: a set such as 'jewish', a "
-            "holiday name such as \"Yom Kippur\" or \"Passover\", or a date. "
+            "days you will take off regardless: a set such as 'jewish' or 'muslim', a "
+            "holiday name such as \"Yom Kippur\" or \"Eid al-Fitr\", or a date. "
             "Charged to your budget, and the planner builds around them "
             "(repeatable). See --list-observances"
         ),
@@ -289,6 +289,14 @@ def build_parser() -> argparse.ArgumentParser:
     personal.add_argument(
         "--erev", action="store_true",
         help="also take the day each Jewish holiday begins on, since it starts at sunset",
+    )
+    personal.add_argument(
+        "--shift", type=int, default=0, metavar="N",
+        help=(
+            "move every computed Muslim holiday by N days (-3 to 3), for a local "
+            "moon sighting. Dates from a config 'observances' entry are not moved. "
+            "Muslim dates stay provisional either way"
+        ),
     )
     personal.add_argument(
         "--conference", action="append", default=[], metavar="NAME",
@@ -474,6 +482,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             years=range(start_year, end_year + 1),
             diaspora=not args.israel,
             include_erev=args.erev,
+            muslim_shift=args.shift,
         )
     except (ValueError, FileNotFoundError, OverflowError) as exc:
         parser.error(str(exc))
