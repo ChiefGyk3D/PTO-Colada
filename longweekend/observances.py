@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Set
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
-from . import hebrew
+from . import hebrew, islamic
 
 __all__ = [
     "PersonalDay",
@@ -39,6 +39,10 @@ class PersonalDay:
     date: dt.date
     source: str
     note: str = ""
+    #: True when the date is a best estimate that may move (Muslim holidays follow
+    #: moon sighting). Reported with the same PROVISIONAL mechanism as an
+    #: unconfirmed employer holiday.
+    provisional: bool = False
 
     def label(self) -> str:
         return f"{self.name}{' - ' + self.note if self.note else ''}"
@@ -55,6 +59,14 @@ OBSERVANCE_SETS: Dict[str, str] = {
         "Lag BaOmer and Tisha B'Av"
     ),
     "jewish-high-holidays": "Rosh Hashanah, Yom Kippur, Shemini Atzeret and Simchat Torah only",
+    "muslim": (
+        "Eid al-Fitr and Eid al-Adha (dates are estimates: moon sighting can move them "
+        "1 to 2 days, so they are reported as provisional)"
+    ),
+    "muslim-all": (
+        "everything in 'muslim' plus Islamic New Year, Ashura, Mawlid, Isra and Mi'raj, "
+        "the first day of Ramadan and Laylat al-Qadr (the day after its night)"
+    ),
 }
 
 
@@ -67,7 +79,9 @@ def describe_sets() -> str:
     lines.append(
         "You can also name a single holiday -- --observe \"Yom Kippur\" -- or give\n"
         "plain dates: --observe 2026-09-21. Names are matched loosely, so 'Passover'\n"
-        "finds Pesach and 'Sukkot' finds all of its days."
+        "finds Pesach and 'Sukkot' finds all of its days. Muslim holidays are computed\n"
+        "with a tabular calendar and always reported as provisional; --shift N moves\n"
+        "them by a local sighting, and a config 'observances' mapping sets announced dates."
     )
     return "\n".join(lines)
 
@@ -112,14 +126,25 @@ def resolve_observances(
     years: Iterable[int],
     diaspora: bool = True,
     include_erev: bool = False,
+    shift: int = 0,
+    overrides: Optional[Mapping[str, Sequence[dt.date]]] = None,
 ) -> List[PersonalDay]:
     """Turn ``--observe`` specs into dated observances across ``years``.
 
     A spec is a named set (``jewish``), a single holiday name (``Yom Kippur``,
     ``Passover``), or an explicit ``YYYY-MM-DD`` date. Unknown specs raise, with
     the list of things that would have worked.
+
+    Muslim holidays (``muslim``, ``muslim-all``, or a name) come from the tabular
+    Islamic calendar and are marked provisional. ``shift`` moves them by up to
+    three days; ``overrides`` maps a holiday name to announced dates, which
+    replace the computed ones and are not provisional. Both are validated even
+    when no Muslim holiday is selected.
     """
     years = sorted(set(years))
+    shift = islamic.check_shift(shift)
+    verified = islamic.validate_overrides(overrides) if overrides else {}
+    muslim = _MuslimOptions(shift, verified)
     found: List[PersonalDay] = []
     seen: Set[tuple] = set()
 
@@ -134,7 +159,7 @@ def resolve_observances(
             spec = chunk.strip()
             if not spec:
                 continue
-            for observance in _resolve_one(spec, years, diaspora):
+            for observance in _resolve_one(spec, years, diaspora, muslim):
                 keep(observance)
 
     if include_erev:
@@ -161,7 +186,48 @@ def resolve_observances(
     return found
 
 
-def _resolve_one(spec: str, years: Sequence[int], diaspora: bool) -> List[PersonalDay]:
+class _MuslimOptions:
+    def __init__(self, shift: int, overrides: Mapping[str, Sequence[dt.date]]) -> None:
+        self.shift = shift
+        self.overrides = overrides
+
+
+_MUSLIM_SETS = {
+    "muslim": ("Eid al-Fitr", "Eid al-Adha"),
+    "muslim-all": islamic.HOLIDAY_NAMES,
+}
+
+
+def _muslim_days(
+    names: Sequence[str], years: Sequence[int], options: _MuslimOptions
+) -> List[PersonalDay]:
+    out: List[PersonalDay] = []
+    for year in years:
+        for holiday in islamic.holidays(year, options.shift, options.overrides):
+            if holiday.name in names:
+                out.append(_from_muslim(holiday))
+    return out
+
+
+def _from_muslim(holiday: islamic.IslamicHoliday) -> PersonalDay:
+    if holiday.confirmed:
+        note = "date you entered"
+    else:
+        note = "provisional: moon sighting"
+    if holiday.name == "Laylat al-Qadr":
+        note = "the day after its night; " + note
+    return PersonalDay(
+        name=holiday.name,
+        date=holiday.date,
+        source="muslim",
+        note=note,
+        provisional=not holiday.confirmed,
+    )
+
+
+def _resolve_one(
+    spec: str, years: Sequence[int], diaspora: bool, muslim: _MuslimOptions
+) -> List[PersonalDay]:
     key = _normalize(spec)
 
     # An explicit date needs no calendar at all.
@@ -185,6 +251,9 @@ def _resolve_one(spec: str, years: Sequence[int], diaspora: bool) -> List[Person
                 out.append(_from_jewish(holiday))
         return out
 
+    if key in _MUSLIM_SETS:
+        return _muslim_days(_MUSLIM_SETS[key], years, muslim)
+
     # A single holiday, matched loosely: "Passover" finds every day of Pesach.
     wanted = _ALIASES.get(key, key)
     matches: List[hebrew.JewishHoliday] = []
@@ -200,10 +269,14 @@ def _resolve_one(spec: str, years: Sequence[int], diaspora: bool) -> List[Person
         restricted = [h for h in matches if h.work_restricted]
         return [_from_jewish(h) for h in (restricted or matches)]
 
+    names = islamic.match_names(spec)
+    if names:
+        return _muslim_days(names, years, muslim)
+
     raise ValueError(
         f"do not know the observance {spec!r}. Pass a set ("
         + ", ".join(OBSERVANCE_SETS)
-        + "), a holiday name such as \"Yom Kippur\" or \"Passover\", or a "
+        + "), a holiday name such as \"Yom Kippur\", \"Passover\" or \"Eid al-Fitr\", or a "
         "YYYY-MM-DD date. Run --list-observances for the full list."
     )
 

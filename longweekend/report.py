@@ -15,6 +15,7 @@ from .config import CompanyConfig
 from .efficiency import ReturnCurve
 from .goals import PREFER_BONUS, GoalSpec
 from .honest import HonestBreak, HonestReport, thanksgiving_bridge
+from .observances import PersonalDay
 from .planner import PtoPlan
 from .schedule import Break, Day, DayKind, Opportunity
 
@@ -24,6 +25,7 @@ __all__ = [
     "render_json",
     "render_ics",
     "provisional_assumptions",
+    "provisional_observances",
 ]
 
 _RULE = "-" * 72
@@ -76,19 +78,53 @@ def provisional_assumptions(
     return sorted(found, key=lambda h: h.observed)
 
 
-def _provisional_text(assumptions: List[ResolvedHoliday]) -> List[str]:
-    if not assumptions:
+#: Why a Muslim date is provisional, in the words every output format uses.
+_MOON_NOTE = "Islamic calendar date is an estimate; moon sighting can move it 1 to 2 days"
+
+
+def provisional_observances(
+    config: CompanyConfig, years: Iterable[int]
+) -> List[PersonalDay]:
+    """Personal days whose date may still move, in the selected years.
+
+    Muslim holidays follow moon sighting, so each one is provisional until you
+    enter the announced date in the config's ``observances`` mapping.
+    """
+    wanted = set(years)
+    found = [o for o in config.observances if o.provisional and o.date.year in wanted]
+    return sorted(found, key=lambda o: (o.date, o.name))
+
+
+def _provisional_text(
+    assumptions: List[ResolvedHoliday], personal: Sequence[PersonalDay] = ()
+) -> List[str]:
+    if not assumptions and not personal:
         return []
-    lines = [
-        "PROVISIONAL: this result depends on days that are not confirmed. "
-        "Confirm them with the employer",
-        "and rerun; a changed date can change every number below.",
-        "  Unconfirmed:",
+    if assumptions:
+        lines = [
+            "PROVISIONAL: this result depends on days that are not confirmed. "
+            "Confirm them with the employer",
+            "and rerun; a changed date can change every number below.",
+            "  Unconfirmed:",
+        ]
+    else:
+        lines = [
+            "PROVISIONAL: this result depends on dates that follow moon sighting. "
+            "Check the announced dates",
+            "(enter them under 'observances' in a config file) and rerun; a changed "
+            "date can change every number below.",
+            "  Unconfirmed:",
+        ]
+    rows = [
+        (h.observed, h.name, f"{h.observed.strftime('%a %b %d, %Y')}  {h.name}: "
+         f"{_STATUS_NOTE.get(h.status or '', h.status)}")
+        for h in assumptions
+    ] + [
+        (o.date, o.name, f"{o.date.strftime('%a %b %d, %Y')}  {o.name}: {_MOON_NOTE}")
+        for o in personal
     ]
-    for h in assumptions:
-        lines.append(
-            f"    {h.observed.strftime('%a %b %d, %Y')}  {h.name}: {_STATUS_NOTE.get(h.status or '', h.status)}"
-        )
+    for _, _, text in sorted(rows, key=lambda row: (row[0], row[1])):
+        lines.append(f"    {text}")
     lines.append("")
     return lines
 
@@ -110,7 +146,12 @@ def render_text(
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
     lines.append("")
-    lines.extend(_provisional_text(provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())))
+    lines.extend(
+        _provisional_text(
+            provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ()),
+            provisional_observances(config, holidays_by_year),
+        )
+    )
     if goal is not None:
         lines.extend(_render_goal(goal, plan))
         if show_holidays:
@@ -598,7 +639,10 @@ def render_json(
             "blackout": sorted(d.isoformat() for d in config.blackout),
             "committed": sorted(d.isoformat() for d in config.committed),
             "observances": [
-                {"name": o.name, "date": o.date.isoformat(), "source": o.source, "note": o.note}
+                dict(
+                    {"name": o.name, "date": o.date.isoformat(), "source": o.source, "note": o.note},
+                    **({"provisional": True} if o.provisional else {}),
+                )
                 for o in config.observances
             ],
             "conferences": [
@@ -615,11 +659,15 @@ def render_json(
         "years": {},
     }
     assumptions = provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())
-    if assumptions:
+    personal = provisional_observances(config, holidays_by_year)
+    if assumptions or personal:
         payload["provisional"] = True
         payload["assumptions"] = [
             {"name": h.name, "observed": h.observed.isoformat(), "status": h.status}
             for h in assumptions
+        ] + [
+            {"name": o.name, "observed": o.date.isoformat(), "status": "moon-sighting"}
+            for o in personal
         ]
     years: Dict[str, object] = payload["years"]  # type: ignore[assignment]
     for year in sorted(holidays_by_year):
@@ -786,10 +834,11 @@ def render_ics(
     """Emit an all-day-event calendar of holidays, PTO days and planned breaks."""
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     assumptions = provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())
+    personal = provisional_observances(config, holidays_by_year)
     caveat = ""
-    if assumptions:
+    if assumptions or personal:
         caveat = "PROVISIONAL: depends on unconfirmed days (" + ", ".join(
-            h.name for h in assumptions
+            [h.name for h in assumptions] + [o.name for o in personal]
         ) + ")"
     uncertain = {h.observed for h in assumptions}
     lines: List[str] = [
@@ -798,13 +847,17 @@ def render_ics(
         "PRODID:-//Long Weekend Planner//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{_escape(config.name)} time off" + (" (PROVISIONAL)" if assumptions else ""),
+        f"X-WR-CALNAME:{_escape(config.name)} time off" + (" (PROVISIONAL)" if assumptions or personal else ""),
     ]
-    if assumptions:
+    if assumptions or personal:
         lines.append("X-LWP-PROVISIONAL:TRUE")
         for h in assumptions:
             lines.append(
                 f"X-LWP-ASSUMPTION:{_escape(h.name)} {h.observed.isoformat()} {h.status}"
+            )
+        for o in personal:
+            lines.append(
+                f"X-LWP-ASSUMPTION:{_escape(o.name)} {o.date.isoformat()} moon-sighting"
             )
 
     if include_holidays:

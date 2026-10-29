@@ -3,6 +3,7 @@
 from .catalog import PRESETS, Observance, ResolvedHoliday, resolve_year
 from .conferences import Conference, ConferenceOccurrence, load_conferences
 from .hebrew import JewishHoliday, holidays as jewish_holidays
+from .islamic import IslamicHoliday, holidays as muslim_holidays
 from .observances import OBSERVANCE_SETS, PersonalDay, resolve_observances
 from .config import CompanyConfig, build_config
 from .efficiency import CurvePoint, ReturnCurve, return_curve
@@ -17,6 +18,7 @@ __all__ = [
     "Conference",
     "ConferenceOccurrence",
     "CurvePoint",
+    "IslamicHoliday",
     "JewishHoliday",
     "PersonalDay",
     "Break",
@@ -31,6 +33,7 @@ __all__ = [
     "__version__",
     "build_config",
     "jewish_holidays",
+    "muslim_holidays",
     "load_conferences",
     "resolve_observances",
     "build_days",
