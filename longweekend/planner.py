@@ -85,6 +85,16 @@ class PtoPlan:
         return sum(1 for d in self.days if d.is_off)
 
     @property
+    def days_in_breaks(self) -> int:
+        """Days inside breaks of at least ``min_break``: what the planner maximises."""
+        return sum(b.length for b in self.breaks)
+
+    @property
+    def efficiency(self) -> Optional[float]:
+        """Days in breaks per day of leave spent, or ``None`` when none was spent."""
+        return self.days_in_breaks / self.total_pto if self.total_pto else None
+
+    @property
     def total_pto(self) -> int:
         """Every day taken off, floating holidays included."""
         return len(self.pto_dates)

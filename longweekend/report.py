@@ -5,10 +5,11 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .catalog import WEEKDAY_NAMES, Observance, ResolvedHoliday
 from .config import CompanyConfig
+from .efficiency import ReturnCurve
 from .planner import PtoPlan
 from .schedule import Break, Day, DayKind, Opportunity
 
@@ -26,6 +27,9 @@ def render_text(
     opportunities_by_year: Dict[int, List[Opportunity]],
     plan: Optional[PtoPlan] = None,
     show_holidays: bool = True,
+    efficiency: bool = False,
+    curve: Optional[ReturnCurve] = None,
+    objective: Optional[Dict[str, Any]] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
@@ -63,10 +67,14 @@ def render_text(
                 )
             lines.append("")
         else:
-            lines.extend(_render_plan_year(plan, year, config))
+            lines.extend(_render_plan_year(plan, year, config, efficiency))
 
     if plan is not None:
         lines.extend(_render_totals(plan))
+        if efficiency:
+            lines.extend(_render_efficiency(plan, objective))
+        if curve is not None:
+            lines.extend(_render_curve(curve))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -157,7 +165,9 @@ def _observance_row(
     return f"{row}   ({note})" if note else row
 
 
-def _render_plan_year(plan: PtoPlan, year: int, config: CompanyConfig) -> List[str]:
+def _render_plan_year(
+    plan: PtoPlan, year: int, config: CompanyConfig, efficiency: bool = False
+) -> List[str]:
     breaks = [b for b in plan.breaks if b.start.year == year or b.end.year == year]
     lines = [f"  Planned breaks ({plan.min_break}+ consecutive days off)"]
     if not breaks:
@@ -167,6 +177,8 @@ def _render_plan_year(plan: PtoPlan, year: int, config: CompanyConfig) -> List[s
             cost = f"{item.pto_cost} PTO"
             taken = ", ".join(d.strftime("%b %d") for d in item.pto_dates)
             detail = f"take {taken}"
+            if efficiency:
+                detail += f"  ({item.efficiency:.1f} per PTO day)"
         else:
             cost, detail = "free", "no PTO needed"
         names = "; ".join(dict.fromkeys(item.holidays))
@@ -222,6 +234,56 @@ def _render_totals(plan: PtoPlan) -> List[str]:
     return lines
 
 
+def _render_efficiency(plan: PtoPlan, objective: Optional[Dict[str, Any]]) -> List[str]:
+    """Days in breaks per day of leave: the score the planner is judged on."""
+    lines = [""]
+    if plan.total_pto:
+        lines.append(
+            f"  Efficiency: {plan.days_in_breaks} days in breaks for {plan.total_pto} PTO "
+            f"day(s): {plan.efficiency:.1f} days per PTO day"
+        )
+    else:
+        lines.append(
+            f"  Efficiency: {plan.days_in_breaks} days in breaks without booking any leave"
+        )
+    if objective is not None:
+        if objective["kind"] == "min_return":
+            lines.append(
+                f"  Spending stopped at {objective['budget_per_year']} PTO day(s) per year: "
+                f"the next day would return fewer than {objective['value']:g} days in breaks."
+            )
+        else:
+            lines.append(
+                f"  Target of {objective['value']} days in breaks reached with "
+                f"{objective['budget_per_year']} PTO day(s) per year."
+            )
+    return lines
+
+
+def _render_curve(curve: ReturnCurve) -> List[str]:
+    """Budget against days in breaks, with the point where returns fall away."""
+    knee = curve.knee
+    lines = [
+        "",
+        "Return curve (PTO budget per year against days in breaks)",
+        _RULE,
+        "  Budget  PTO spent  Days in breaks  Last day returned  Days per PTO",
+    ]
+    for point in curve.points:
+        gained = "-" if point.marginal is None else f"{point.marginal:.1f}"
+        score = "-" if point.days_per_pto is None else f"{point.days_per_pto:.1f}"
+        row = (
+            f"  {point.budget:>6}  {point.pto_spent:>9}  {point.days_in_breaks:>14}"
+            f"  {gained:>17}  {score:>12}"
+        )
+        if knee is not None and point.budget == knee.budget:
+            row += "  <- knee"
+        lines.append(row)
+    if knee is None:
+        lines.append("  (no knee: the return never falls)")
+    return lines
+
+
 def _describe_config(config: CompanyConfig) -> str:
     workweek = _workweek_label(config.workweek)
     observance = {
@@ -252,6 +314,9 @@ def render_json(
     holidays_by_year: Dict[int, List[ResolvedHoliday]],
     opportunities_by_year: Dict[int, List[Opportunity]],
     plan: Optional[PtoPlan] = None,
+    efficiency: bool = False,
+    curve: Optional[ReturnCurve] = None,
+    objective: Optional[Dict[str, Any]] = None,
 ) -> str:
     payload: Dict[str, object] = {
         "config": {
@@ -322,6 +387,25 @@ def render_json(
             "total_days_off": plan.total_days_off,
             "breaks": [_break_json(b) for b in plan.breaks],
         }
+        extras: Dict[str, object] = payload["plan"]  # type: ignore[assignment]
+        if efficiency:
+            extras["efficiency"] = {
+                "days_in_breaks": plan.days_in_breaks,
+                "pto_spent": plan.total_pto,
+                "days_per_pto": round(plan.efficiency, 3) if plan.efficiency else None,
+            }
+        if objective is not None:
+            extras["objective"] = {
+                ("min_return" if objective["kind"] == "min_return" else "target_days_off"):
+                    objective["value"],
+                "budget_per_year": objective["budget_per_year"],
+            }
+    if curve is not None:
+        knee = curve.knee
+        payload["curve"] = {
+            "points": curve.as_dicts(),
+            "knee": knee.budget if knee is not None else None,
+        }
     return json.dumps(payload, indent=2, sort_keys=False)
 
 
@@ -345,6 +429,7 @@ def render_ics(
     holidays_by_year: Dict[int, List[ResolvedHoliday]],
     plan: Optional[PtoPlan] = None,
     include_holidays: bool = True,
+    efficiency: bool = False,
 ) -> str:
     """Emit an all-day-event calendar of holidays, PTO days and planned breaks."""
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -393,12 +478,15 @@ def render_ics(
             )
         for item in plan.breaks:
             names = "; ".join(dict.fromkeys(item.holidays))
+            notes = names or "Long weekend"
+            if efficiency and item.efficiency is not None:
+                notes += f" ({item.efficiency:.1f} days off per PTO day)"
             lines.extend(
                 _event(
                     start=item.start,
                     end=item.end + dt.timedelta(days=1),
                     summary=f"{item.length}-day break ({item.pto_cost} PTO)",
-                    description=(names or "Long weekend"),
+                    description=notes,
                     stamp=stamp,
                     category="BREAK",
                     transparent=True,

@@ -5,6 +5,7 @@ from .conferences import Conference, ConferenceOccurrence, load_conferences
 from .hebrew import JewishHoliday, holidays as jewish_holidays
 from .observances import OBSERVANCE_SETS, PersonalDay, resolve_observances
 from .config import CompanyConfig, build_config
+from .efficiency import CurvePoint, ReturnCurve, return_curve
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .schedule import Break, Day, DayKind, build_days, find_breaks, find_opportunities
 
@@ -15,6 +16,7 @@ __all__ = [
     "PRESETS",
     "Conference",
     "ConferenceOccurrence",
+    "CurvePoint",
     "JewishHoliday",
     "PersonalDay",
     "Break",
@@ -24,6 +26,7 @@ __all__ = [
     "Observance",
     "PtoBudget",
     "PtoPlan",
+    "ReturnCurve",
     "ResolvedHoliday",
     "__version__",
     "build_config",
@@ -34,5 +37,6 @@ __all__ = [
     "find_breaks",
     "find_opportunities",
     "optimize_pto",
+    "return_curve",
     "resolve_year",
 ]

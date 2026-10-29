@@ -11,6 +11,7 @@ from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
 from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
 from .config import CompanyConfig, build_config
+from .efficiency import ReturnCurve, return_curve
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import render_ics, render_json, render_text
 from .schedule import Opportunity, build_days, find_opportunities
@@ -36,6 +37,9 @@ examples:
   long-weekend --add "Good Friday" --add "Election Day" --pto 15
   long-weekend --pto 15 --blackout 2026-04-01:2026-04-15 --commit 2026-07-20
   long-weekend --pto 15 --format ics > timeoff.ics
+  long-weekend --pto 17 --curve                 where extra PTO stops paying off
+  long-weekend --pto 17 --min-return 2.5        stop when a day returns under 2.5 days
+  long-weekend --pto 17 --target-days-off 40    the fewest PTO days that reach 40
 """
 
 
@@ -148,6 +152,36 @@ def build_parser() -> argparse.ArgumentParser:
     pto.add_argument(
         "--commit", action="append", default=[], dest="committed", metavar="DATE[:DATE]",
         help="PTO you have already booked; charged to the budget (repeatable)",
+    )
+
+    efficiency = parser.add_argument_group("efficiency: how much PTO is worth spending")
+    efficiency.add_argument(
+        "--efficiency", action="store_true",
+        help=(
+            "show days in breaks per PTO day, overall and for each break "
+            "(implied by the options below)"
+        ),
+    )
+    efficiency.add_argument(
+        "--curve", action="store_true",
+        help=(
+            "show the return curve: for every per-year PTO budget up to --pto, "
+            "the days in breaks it buys, what the last day returned, and the knee"
+        ),
+    )
+    efficiency.add_argument(
+        "--min-return", type=float, metavar="DAYS",
+        help=(
+            "stop spending PTO once the next day would return fewer than DAYS "
+            "days in breaks (--pto is the ceiling)"
+        ),
+    )
+    efficiency.add_argument(
+        "--target-days-off", type=int, metavar="N",
+        help=(
+            "spend the fewest PTO days that put N days into breaks; an error "
+            "names the most --pto can reach if N is out of range"
+        ),
     )
 
     personal = parser.add_argument_group("days you take off yourself")
@@ -320,6 +354,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             carryover=args.carryover,
             min_break=args.min_break,
             max_consecutive_pto=args.max_consecutive_pto,
+            min_return=args.min_return,
+            target_days_off=args.target_days_off,
             blackout=args.blackout,
             committed=args.committed,
             observe=args.observe,
@@ -355,12 +391,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         opportunities_by_year.setdefault(opportunity.date.year, []).append(opportunity)
 
     plan: Optional[PtoPlan] = None
-    if (
+    curve: Optional[ReturnCurve] = None
+    objective: Optional[Dict[str, object]] = None
+    stops = config.min_return is not None or config.target_days_off is not None
+    wants_curve = args.curve or stops
+    has_budget = (
         config.pto_days is not None
         or config.pto_by_year
         or config.floating_days is not None
         or config.floating_by_year
-    ):
+    )
+    if wants_curve and not has_budget:
+        parser.error("--curve, --min-return and --target-days-off need a PTO budget: add --pto")
+        return 2  # pragma: no cover - parser.error exits
+    if has_budget:
         budget = PtoBudget(
             per_year=dict(config.pto_by_year),
             default=config.pto_days or 0,
@@ -368,24 +412,56 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             floating_per_year=dict(config.floating_by_year),
             floating=config.floating_days or 0,
         )
+        long_break_bonus = 1 if args.style == "vacations" else 0
         try:
-            plan = optimize_pto(
-                days,
-                budget,
-                min_break=config.min_break,
-                max_consecutive_pto=config.max_consecutive_pto,
-                committed=config.committed,
-                long_break_bonus=1 if args.style == "vacations" else 0,
-            )
+            if wants_curve:
+                curve = return_curve(
+                    days,
+                    budget,
+                    min_break=config.min_break,
+                    max_consecutive_pto=config.max_consecutive_pto,
+                    committed=config.committed,
+                    long_break_bonus=long_break_bonus,
+                )
+            if curve is not None and config.min_return is not None:
+                chosen = curve.stop_for_min_return(config.min_return)
+                objective = {"kind": "min_return", "value": config.min_return}
+            elif curve is not None and config.target_days_off is not None:
+                chosen = curve.cheapest_for_target(config.target_days_off)
+                objective = {"kind": "target_days_off", "value": config.target_days_off}
+            if curve is not None and objective is not None:
+                objective["budget_per_year"] = chosen.budget
+                plan = curve.plans[chosen.budget]
+            else:
+                plan = optimize_pto(
+                    days,
+                    budget,
+                    min_break=config.min_break,
+                    max_consecutive_pto=config.max_consecutive_pto,
+                    committed=config.committed,
+                    long_break_bonus=long_break_bonus,
+                )
         except ValueError as exc:
             parser.error(str(exc))
             return 2  # pragma: no cover - parser.error exits
 
+    show_efficiency = args.efficiency or wants_curve
+    # The curve is always computed for the stop conditions, but printed only on request.
+    shown_curve = curve if args.curve else None
+
     if args.format == "json":
-        print(render_json(config, holidays_by_year, opportunities_by_year, plan))
+        print(
+            render_json(
+                config, holidays_by_year, opportunities_by_year, plan,
+                efficiency=show_efficiency, curve=shown_curve, objective=objective,
+            )
+        )
     elif args.format == "ics":
         sys.stdout.write(
-            render_ics(config, holidays_by_year, plan, include_holidays=not args.no_holidays)
+            render_ics(
+                config, holidays_by_year, plan,
+                include_holidays=not args.no_holidays, efficiency=show_efficiency,
+            )
         )
     else:
         print(
@@ -395,6 +471,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 opportunities_by_year,
                 plan,
                 show_holidays=not args.no_holidays,
+                efficiency=show_efficiency,
+                curve=shown_curve,
+                objective=objective,
             ),
             end="",
         )

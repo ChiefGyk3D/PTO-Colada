@@ -263,6 +263,71 @@ candidates — greedy gets the easy cases right but loses whenever two
 opportunities compete for the same budget. The test suite checks the result
 against exhaustive search.
 
+### How much PTO is worth spending
+
+The planner will happily spend the whole budget, even when the last days buy
+little. These options measure that and let you stop earlier. They all need
+`--pto` as the ceiling.
+
+```
+long-weekend --pto 17 --efficiency            # score the plan
+long-weekend --pto 17 --curve                 # budget against days in breaks
+long-weekend --pto 17 --min-return 2.5        # stop when a day returns under 2.5
+long-weekend --pto 17 --target-days-off 40    # the fewest PTO days that reach 40
+```
+
+**Days off** here means *days in breaks*: days that fall inside a break of at
+least `--min-break` consecutive days off. Plain weekends and stray holidays do
+not count. The **efficiency** is days in breaks per PTO day spent, overall and
+for each break. (The older "days off per PTO day spent" line in the totals
+counts every day off in the window, so it is a larger number; the two are
+labeled differently on purpose.) `--efficiency` adds the score to the text
+output, to the JSON (`plan.efficiency`) and to the description of each break
+event in the `.ics` file. Without any of these options the output is exactly what
+it was before.
+
+**The return curve** replans every budget from 0 up to `--pto` and records
+what each buys. A budget `b` gives every year `min(its grant, b)` PTO days;
+floating holidays, carryover, `--commit` and `--blackout` stay as configured.
+The **knee** is the last budget that still earns the best rate of return, the
+point just before the first step that earns less. For the federal preset in
+2027 with `--min-break 4`:
+
+```
+$ long-weekend --start-year 2027 --years 1 --min-break 4 --pto 17 --curve
+  Budget  PTO spent  Days in breaks  Last day returned  Days per PTO
+       0          0               0                  -             -
+       1          1               4                4.0           4.0
+      ...
+      10         10              40                4.0           4.0
+      11         11              44                4.0           4.0  <- knee
+      12         12              45                1.0           3.8
+      ...
+      17         17              56                3.0           3.3
+```
+
+The first 11 days return 4 days each; the last six return about 2 each, and
+17 PTO days give 56 days in breaks (the "about 55" figure that gets quoted).
+With `--format json` the same rows appear under `curve.points`; in Python, call
+`longweekend.efficiency.return_curve(days, budget, min_break=4)` and use
+`curve.as_dicts()`, `curve.knee` and `curve.points`.
+
+**`--min-return X`** takes the smallest budget whose *next* extra day returns
+fewer than `X` days in breaks, so `--min-return 2.5` stops at 11 days and plans
+44 days in breaks. It is applied per year: the stopping budget is one
+per-year cap shared by every year in the window, never above that year's own
+grant. A step that returns little ends the search even if a later step would
+earn more, so a very high `X` can stop at 0.
+
+**`--target-days-off N`** takes the smallest per-year budget that reaches `N`
+days in breaks: `--target-days-off 40` plans 10 PTO days. If `--pto` cannot
+reach `N`, it exits with an error that names the most it can reach (here, 56).
+With several years the cap is shared, so the total is the fewest for that
+shape, not a global minimum across uneven years.
+
+`--min-return` and `--target-days-off` are alternatives; both also accept
+`min_return` and `target_days_off` in a config file.
+
 ### Many long weekends, or fewer long trips
 
 Once the obvious holiday bridges are bought, the leftover budget has to go
