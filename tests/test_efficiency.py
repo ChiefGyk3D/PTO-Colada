@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import pickle
 
 import pytest
 
@@ -199,11 +200,109 @@ class TestSaturation:
             ref = optimize_pto(days, capped_budget(budget, point.budget, years), min_break=4)
             assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
 
-    def test_a_skipped_budget_still_gives_its_own_fresh_plan(self):
+    @staticmethod
+    def count_plans(monkeypatch):
+        calls = []
+        real = efficiency_module.optimize_pto
+        monkeypatch.setattr(
+            efficiency_module, "optimize_pto", lambda *a, **k: calls.append(1) or real(*a, **k)
+        )
+        return calls
+
+    def test_a_skipped_budget_plans_once_and_on_demand(self, monkeypatch):
+        days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        calls = self.count_plans(monkeypatch)
+        curve = return_curve(days, PtoBudget(default=40), min_break=4)
+        built = len(calls)
+        assert built < 41  # the tail was skipped
+        plan = curve.plans[38]
+        assert len(calls) == built + 1  # planned when asked for
+        # It is the plan for budget 38, not some other point's.
+        fresh = optimize_pto(days, PtoBudget(default=38), min_break=4)
+        assert plan.granted_by_year == fresh.granted_by_year == {2026: 38}
+        assert plan.pto_dates == fresh.pto_dates
+        again = len(calls)
+        assert curve.plans[38] is plan  # remembered, not replanned
+        assert len(calls) == again
+
+    def test_the_plans_cover_exactly_the_curves_budgets(self, monkeypatch):
+        days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        calls = self.count_plans(monkeypatch)
+        curve = return_curve(days, PtoBudget(default=40), min_break=4)
+        built = len(calls)
+        assert len(curve.plans) == len(curve.points) == 41
+        assert list(curve.plans) == [p.budget for p in curve.points]
+        assert 0 in curve.plans and 40 in curve.plans
+        assert -5 not in curve.plans and 999 not in curve.plans
+        assert curve.plans.get(999) is None
+        assert len(calls) == built  # asking about keys never plans
+        for bad in (-5, 999):
+            with pytest.raises(KeyError):
+                curve.plans[bad]
+        assert len(calls) == built
+
+    def test_a_curve_survives_pickling(self):
         days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
         curve = return_curve(days, PtoBudget(default=40), min_break=4)
-        fresh = optimize_pto(days, PtoBudget(default=35), min_break=4)
-        assert curve.plans[35].pto_dates == fresh.pto_dates
+        copy = pickle.loads(pickle.dumps(curve))
+        assert copy.points == curve.points
+        assert copy.plans[39].pto_dates == curve.plans[39].pto_dates  # a skipped budget
+        assert copy.plans[5].pto_dates == curve.plans[5].pto_dates
+        assert list(copy.plans) == list(curve.plans)
+        plans_only = pickle.loads(pickle.dumps(curve.plans))
+        assert plans_only[40].granted_by_year == {2026: 40}
+
+    BOUNDARY = (dt.date(2026, 12, 7), dt.date(2027, 1, 24))
+
+    #: Blackouts matter: the skip counts only the working days left to take.
+    BLACKOUT = {
+        dt.date(2026, 12, 30), dt.date(2026, 12, 31),
+        *(dt.date(2027, 1, day) for day in range(14, 28)),
+    }
+
+    def boundary_days(self):
+        holidays = []
+        for year in (2025, 2026, 2027, 2028):
+            holidays.extend(resolve_year(PRESETS["minimal"], year))
+        return build_days(*self.BOUNDARY, holidays, blackout=self.BLACKOUT)
+
+    def workdays(self, days):
+        return {
+            year: sum(1 for d in days if d.date.year == year and d.kind is DayKind.WORK and not d.blackout)
+            for year in (2026, 2027)
+        }
+
+    def test_a_grant_one_short_of_its_working_days_still_replans(self):
+        """The skip needs grant >= working days; one short relies on rollover."""
+        days = self.boundary_days()
+        work = self.workdays(days)
+        budget = PtoBudget(
+            per_year={2026: work[2026] + 1, 2027: work[2027] - 1}, carryover=3
+        )
+        curve = return_curve(days, budget, min_break=4, long_break_bonus=2)
+        for point in curve.points:
+            ref = optimize_pto(
+                days, capped_budget(budget, point.budget, [2026, 2027]),
+                min_break=4, long_break_bonus=2,
+            )
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
+
+    def test_a_grant_equal_to_its_working_days_lets_the_skip_engage(self, monkeypatch):
+        days = self.boundary_days()
+        work = self.workdays(days)
+        budget = PtoBudget(per_year=dict(work), carryover=3)
+        calls = self.count_plans(monkeypatch)
+        curve = return_curve(
+            days, budget, min_break=4, long_break_bonus=2, max_budget=work[2026] + 10
+        )
+        assert len(curve.points) == work[2026] + 11
+        assert len(calls) <= max(work.values()) + 1
+        for point in curve.points:
+            ref = optimize_pto(
+                days, capped_budget(budget, point.budget, [2026, 2027]),
+                min_break=4, long_break_bonus=2,
+            )
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
 
     def test_the_skip_still_engages_for_even_grants_without_carryover(self, monkeypatch):
         days = make_days(dt.date(2026, 12, 14), dt.date(2027, 1, 29), PRESETS["federal"])

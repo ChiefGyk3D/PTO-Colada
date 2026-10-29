@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set
 
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .schedule import Day, DayKind
@@ -50,7 +50,10 @@ class CurvePoint:
 class ReturnCurve:
     points: List[CurvePoint]
     #: The plan behind each point, keyed by budget, so callers can adopt one.
-    plans: Dict[int, PtoPlan] = field(default_factory=dict, repr=False, compare=False)
+    #: Valid keys are exactly the budgets in ``points``; others raise
+    #: ``KeyError``. Plans for budgets the curve skipped as saturated are made
+    #: on first access (see :class:`_CurvePlans`).
+    plans: Mapping[int, PtoPlan] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def knee(self) -> Optional[CurvePoint]:
@@ -142,16 +145,74 @@ class ReturnCurve:
         ]
 
 
-class _LazyPlans(Dict[int, PtoPlan]):
-    """Plans by budget; one that was skipped is planned on first use."""
+class _Planner:
+    """Plans one per-year cap with fixed settings; a class so a curve can be pickled."""
 
-    def __init__(self, plan_for: Callable[[int], PtoPlan]) -> None:
-        super().__init__()
-        self._plan_for = plan_for
+    def __init__(
+        self,
+        days: Sequence[Day],
+        budget: PtoBudget,
+        years: Sequence[int],
+        min_break: int,
+        max_consecutive_pto: Optional[int],
+        committed: Optional[Set[dt.date]],
+        long_break_bonus: int,
+    ) -> None:
+        self.days = days
+        self.budget = budget
+        self.years = years
+        self.min_break = min_break
+        self.max_consecutive_pto = max_consecutive_pto
+        self.committed = committed
+        self.long_break_bonus = long_break_bonus
 
-    def __missing__(self, cap: int) -> PtoPlan:
-        plan = self[cap] = self._plan_for(cap)
+    def __call__(self, cap: int) -> PtoPlan:
+        return optimize_pto(
+            self.days,
+            capped_budget(self.budget, cap, self.years),
+            min_break=self.min_break,
+            max_consecutive_pto=self.max_consecutive_pto,
+            committed=self.committed,
+            long_break_bonus=self.long_break_bonus,
+        )
+
+
+class _CurvePlans(Mapping[int, PtoPlan]):
+    """The plan behind each of a curve's budgets, made when first asked for.
+
+    The keys are exactly the curve's budgets: anything else raises
+    ``KeyError`` as a dict would, and ``in``, ``len`` and iteration never plan
+    anything. Budgets the curve skipped (past a year's working days) are
+    planned on first access and remembered, so ``values()`` and ``items()``
+    plan every skipped budget -- iterate the keys when that is not wanted.
+    """
+
+    def __init__(self, planner: _Planner) -> None:
+        self._planner = planner
+        self._budgets: List[int] = []
+        self._made: Dict[int, PtoPlan] = {}
+
+    def _record(self, cap: int, plan: Optional[PtoPlan] = None) -> None:
+        self._budgets.append(cap)
+        if plan is not None:
+            self._made[cap] = plan
+
+    def __getitem__(self, cap: int) -> PtoPlan:
+        if cap not in self._budgets:
+            raise KeyError(cap)
+        plan = self._made.get(cap)
+        if plan is None:
+            plan = self._made[cap] = self._planner(cap)
         return plan
+
+    def __contains__(self, cap: object) -> bool:
+        return cap in self._budgets
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._budgets)
+
+    def __len__(self) -> int:
+        return len(self._budgets)
 
 
 def _turns_up(a: CurvePoint, b: CurvePoint, c: CurvePoint) -> bool:
@@ -209,27 +270,22 @@ def return_curve(
         budget.for_year(y) >= workdays[y] for y in years
     )
     usable = max(workdays.values(), default=0) if skippable else ceiling + 1
-    def plan_for(cap: int) -> PtoPlan:
-        return optimize_pto(
-            days,
-            capped_budget(budget, cap, years),
-            min_break=min_break,
-            max_consecutive_pto=max_consecutive_pto,
-            committed=committed,
-            long_break_bonus=long_break_bonus,
-        )
 
+    planner = _Planner(
+        days, budget, years, min_break, max_consecutive_pto, committed, long_break_bonus
+    )
     points: List[CurvePoint] = []
     # Skipped budgets keep their numbers but not a stored plan: a fresh plan
     # may pick different dates among equal ones, so it is made when asked for.
-    plans: Dict[int, PtoPlan] = _LazyPlans(plan_for)
+    plans = _CurvePlans(planner)
     for cap in range(ceiling + 1):
         if points and points[-1].budget >= usable:
             last = points[-1]
             points.append(CurvePoint(cap, last.pto_spent, last.days_in_breaks, 0.0))
+            plans._record(cap)
             continue
         try:
-            plan = plan_for(cap)
+            plan = planner(cap)
         except ValueError:
             if cap == ceiling:
                 raise
@@ -241,5 +297,5 @@ def return_curve(
             booked = point.pto_spent - previous.pto_spent
             point.marginal = gained / booked if booked > 0 else 0.0
         points.append(point)
-        plans[cap] = plan
+        plans._record(cap, plan)
     return ReturnCurve(points=points, plans=plans)
