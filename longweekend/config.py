@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import math
 import os
+import stat
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
@@ -39,6 +40,8 @@ from .catalog import (
 
 __all__ = [
     "CompanyConfig",
+    "MAX_CONFIG_BYTES",
+    "MAX_CONFIG_DEPTH",
     "load_config_file",
     "build_config",
     "parse_date",
@@ -181,36 +184,148 @@ def rule_from_spec(spec: str) -> Rule:
     return parse_rule(text)
 
 
+#: Largest config file read, in bytes. Real configs are a few kilobytes.
+MAX_CONFIG_BYTES = 1024 * 1024
+#: Deepest nesting of mappings and lists accepted; real configs are about four deep.
+MAX_CONFIG_DEPTH = 16
+
+
+def _read_regular_file(path: str) -> bytes:
+    """Read a config file, refusing anything but a regular file within the size cap.
+
+    The file is opened non-blocking and checked with ``fstat`` on the open
+    descriptor, so a FIFO cannot hang the read and the check cannot race a swap.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"config file not found: {path}") from None
+    except OSError as exc:
+        raise ValueError(f"cannot open config file {path}: {exc.strerror}") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{path} is not a regular file; give the path of a JSON or YAML file")
+        if info.st_size > MAX_CONFIG_BYTES:
+            raise ValueError(
+                f"{path} is too large ({info.st_size} bytes; the limit is {MAX_CONFIG_BYTES})"
+            )
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1  # the file object owns the descriptor now
+            data = handle.read(MAX_CONFIG_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(data) > MAX_CONFIG_BYTES:
+        raise ValueError(f"{path} is too large (the limit is {MAX_CONFIG_BYTES} bytes)")
+    return data
+
+
+def _json_object(path: str):
+    def hook(pairs):
+        result: Dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{path}: duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    return hook
+
+
+def _yaml_loader(path: str):
+    """A SafeLoader that rejects duplicate keys, aliases and merge keys."""
+    import yaml  # type: ignore[import-untyped]
+
+    class StrictLoader(yaml.SafeLoader):
+        def compose_node(self, parent, index):  # type: ignore[no-untyped-def]
+            if self.check_event(yaml.events.AliasEvent):
+                raise ValueError(
+                    f"{path}: YAML aliases are not allowed in config files; write the value out"
+                )
+            return super().compose_node(parent, index)
+
+        def construct_mapping(self, node, deep=False):  # type: ignore[no-untyped-def]
+            seen = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    raise ValueError(
+                        f"{path}: YAML merge keys ('<<') are not allowed in config files"
+                    )
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    duplicate = key in seen
+                    seen.add(key)
+                except TypeError:
+                    continue  # unhashable key; the base class reports it
+                if duplicate:
+                    raise ValueError(f"{path}: duplicate key {key!r}")
+            return super().construct_mapping(node, deep)
+
+    # Keep dates as text so a bad one is reported with its holiday's name
+    # instead of a bare "day is out of range" from inside the YAML library.
+    StrictLoader.add_constructor(
+        "tag:yaml.org,2002:timestamp", lambda loader, node: loader.construct_scalar(node)
+    )
+    return StrictLoader
+
+
+def _check_depth(data: object, path: str) -> None:
+    stack = [(data, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict):
+            children = list(item.values())
+        elif isinstance(item, list):
+            children = list(item)
+        else:
+            continue
+        if depth > MAX_CONFIG_DEPTH:
+            raise ValueError(f"{path} is nested too deeply (limit {MAX_CONFIG_DEPTH} levels)")
+        stack.extend((child, depth + 1) for child in children)
+
+
 def load_config_file(path: str) -> Dict[str, object]:
     """Load a JSON or YAML company config.
 
-    YAML needs PyYAML; JSON works with the stdlib alone.
+    YAML needs PyYAML; JSON works with the stdlib alone. The file must be a
+    regular file no larger than :data:`MAX_CONFIG_BYTES`; duplicate keys,
+    YAML aliases and merge keys, and over-deep nesting are errors.
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"config file not found: {path}")
-    with open(path, "r", encoding="utf-8") as handle:
-        text = handle.read()
+    raw = _read_regular_file(path)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"{path} is not valid UTF-8 text") from None
 
     suffix = os.path.splitext(path)[1].lower()
-    if suffix in {".yaml", ".yml"}:
-        try:
-            import yaml  # type: ignore[import-untyped]
-        except ImportError:
-            raise ValueError(
-                f"{path} is YAML but PyYAML is not installed. "
-                "Install it with 'pip install pyyaml', or use a .json config instead."
-            ) from None
-        data = yaml.safe_load(text)
-    else:
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    try:
+        if suffix in {".yaml", ".yml"}:
+            try:
+                import yaml  # type: ignore[import-untyped]
+            except ImportError:
+                raise ValueError(
+                    f"{path} is YAML but PyYAML is not installed. "
+                    "Install it with 'pip install pyyaml', or use a .json config instead."
+                ) from None
+            try:
+                data = yaml.load(text, Loader=_yaml_loader(path))
+            except yaml.YAMLError as exc:
+                raise ValueError(f"{path} is not valid YAML: {exc}") from None
+        else:
+            try:
+                data = json.loads(text, object_pairs_hook=_json_object(path))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    except RecursionError:
+        raise ValueError(f"{path} is nested too deeply to read") from None
 
     if data is None:
         data = {}
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a mapping at the top level")
+    _check_depth(data, path)
     return data
 
 

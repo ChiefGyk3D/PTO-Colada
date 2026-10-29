@@ -476,7 +476,11 @@ def _parse_when(name: str, when: str) -> Rule:
     match = _ISO_RE.match(when)
     if match:
         year, month, day = (int(g) for g in match.groups())
-        return ExplicitDate(name=name, date=dt.date(year, month, day))
+        try:
+            date = dt.date(year, month, day)
+        except ValueError:
+            raise ValueError(f"{name}: {when} is not a date") from None
+        return ExplicitDate(name=name, date=date)
 
     match = _MD_RE.match(when)
     if match:
