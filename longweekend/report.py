@@ -662,6 +662,12 @@ def render_json(
             "breaks": [_break_json(b) for b in plan.breaks],
         }
         extras: Dict[str, object] = payload["plan"]  # type: ignore[assignment]
+        if goal is not None:
+            extras["headline"] = "honest"
+            extras["total_days_off_note"] = (
+                "total_days_off is the classic count of every day off in the window, "
+                "including breaks that cost no PTO; the headline is the 'honest' block"
+            )
         if efficiency:
             extras["efficiency"] = {
                 "days_in_breaks": plan.days_in_breaks,

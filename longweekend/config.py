@@ -485,11 +485,13 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.min_break = int(data["min_break"])  # type: ignore[arg-type]
         config.min_break_explicit = True
     if "goal" in data:
-        config.goal = str(data["goal"])
+        if not isinstance(data["goal"], str):
+            raise ValueError(f"{path}: 'goal' must be text, one of {', '.join(GOALS)} (got {data['goal']!r})")
+        config.goal = data["goal"]
     if "min_vacation_days" in data:
-        config.min_vacation_days = int(data["min_vacation_days"])  # type: ignore[arg-type]
+        config.min_vacation_days = _file_int(data["min_vacation_days"], "min_vacation_days", path)
     if "max_breaks" in data:
-        config.max_breaks = int(data["max_breaks"])  # type: ignore[arg-type]
+        config.max_breaks = _file_int(data["max_breaks"], "max_breaks", path)
     if "prefer" in data:
         config.prefer |= parse_date_ranges(str(v) for v in _as_list(data["prefer"]))
     if "max_consecutive_pto" in data:
@@ -514,6 +516,15 @@ def _file_number(value: object, key: str, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path}: {key!r} must be a number (got {value!r})")
     return float(value)
+
+
+def _file_int(value: object, key: str, path: str) -> int:
+    """A whole number from a config file; null, booleans, text and fractions are errors."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path}: {key!r} must be a whole number (got {value!r})")
+    if isinstance(value, float) and (not math.isfinite(value) or value != int(value)):
+        raise ValueError(f"{path}: {key!r} must be a whole number (got {value!r})")
+    return int(value)
 
 
 def _as_list(value: object) -> List[object]:

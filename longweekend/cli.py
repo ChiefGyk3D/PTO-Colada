@@ -451,6 +451,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "or its options"
             )
             return 2  # pragma: no cover - parser.error exits
+        if args.efficiency:
+            parser.error(
+                "--efficiency belongs to the classic planner and cannot be combined with "
+                "--goal or its options; the goal output already gives the honest count"
+            )
+            return 2  # pragma: no cover - parser.error exits
         if args.style is not None:
             parser.error("--style belongs to the classic planner; use --goal instead")
             return 2  # pragma: no cover - parser.error exits

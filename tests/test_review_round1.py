@@ -134,3 +134,48 @@ def test_a_real_overspend_is_still_flagged():
     r = score_pto({D(2027, 1, 4), D(2027, 2, 5)}, {}, years=[2027], budgets={2027: 1},
                   carried={2027: 1})
     assert r.budget_rows[0].over == 0 and r.budget_rows[0].carried == 1
+
+
+# ----------------------------------------------------------- items 6, 7, 8
+
+BASE = ["--config", EXAMPLE, "--start-year", "2027", "--years", "1"]
+
+
+def test_efficiency_is_rejected_under_goal(capsys):
+    err = cli(capsys, *BASE, "--goal", "weekends", "--efficiency", expect=2)
+    assert "--efficiency" in err and "classic planner" in err
+
+
+def test_goal_json_labels_the_headline(capsys):
+    data = json.loads(cli(capsys, *BASE, "--goal", "balanced", "--format", "json"))
+    plan = data["plan"]
+    assert plan["headline"] == "honest"
+    assert "every day off in the window" in plan["total_days_off_note"]
+    classic = json.loads(cli(capsys, *BASE, "--pto", "5", "--format", "json"))["plan"]
+    assert "headline" not in classic and "total_days_off_note" not in classic
+
+
+@pytest.mark.parametrize("key,value", [
+    ("min_vacation_days", None), ("min_vacation_days", True), ("min_vacation_days", "7"),
+    ("min_vacation_days", 7.5), ("max_breaks", "x"), ("max_breaks", None),
+    ("max_breaks", False), ("max_breaks", 2.5), ("max_breaks", [3]),
+])
+def test_bad_integer_keys_are_clean_errors(tmp_path, capsys, key, value):
+    path = write(tmp_path, {"pto_days": 3, key: value,
+                            "holidays": [{"name": "X", "date": "2027-03-03"}]})
+    err = cli(capsys, "--config", path, expect=2)
+    assert key in err and "whole number" in err and "Traceback" not in err
+
+
+def test_goal_must_be_text(tmp_path, capsys):
+    path = write(tmp_path, {"pto_days": 3, "goal": None,
+                            "holidays": [{"name": "X", "date": "2027-03-03"}]})
+    assert "goal" in cli(capsys, "--config", path, expect=2)
+
+
+def test_whole_valued_integers_still_work(tmp_path):
+    from longweekend.config import build_config
+    path = write(tmp_path, {"pto_days": 3, "max_breaks": 2, "min_vacation_days": 6,
+                            "holidays": [{"name": "X", "date": "2027-03-03"}]})
+    config = build_config(config_path=path)
+    assert (config.max_breaks, config.min_vacation_days) == (2, 6)
