@@ -75,7 +75,7 @@ class TestYamlFeatures:
 
 class TestLimits:
     def test_size_cap_is_a_named_constant(self):
-        assert MAX_CONFIG_BYTES == 1024 * 1024
+        assert MAX_CONFIG_BYTES == 64 * 1024
 
     def test_oversize_file_is_rejected(self, tmp_path):
         text = '{"name": "' + "a" * MAX_CONFIG_BYTES + '"}'
@@ -88,10 +88,10 @@ class TestLimits:
         assert len(load_config_file(write(tmp_path, text))["name"]) == pad
 
     def test_deep_json_is_a_clean_error(self, tmp_path):
-        assert "nested" in load_error(write(tmp_path, "[" * 200000))
+        assert "nested" in load_error(write(tmp_path, "[" * 60000))
 
     def test_deep_yaml_is_a_clean_error(self, tmp_path):
-        assert "nested" in load_error(write(tmp_path, "[" * 100000, "c.yaml"))
+        assert "nested" in load_error(write(tmp_path, "[" * 60000, "c.yaml"))
 
     def test_moderate_depth_over_the_cap_is_rejected(self, tmp_path):
         text = '{"a":' * (MAX_CONFIG_DEPTH + 2) + "1" + "}" * (MAX_CONFIG_DEPTH + 2)

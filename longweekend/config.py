@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import stat
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
@@ -36,6 +37,7 @@ from .catalog import (
     parse_rule,
     parse_workweek,
     rule_from_mapping,
+    whole_number,
 )
 
 __all__ = [
@@ -184,10 +186,16 @@ def rule_from_spec(spec: str) -> Rule:
     return parse_rule(text)
 
 
-#: Largest config file read, in bytes. Real configs are a few kilobytes.
-MAX_CONFIG_BYTES = 1024 * 1024
+#: Largest config file read, in bytes. A company holiday file is a few kilobytes.
+MAX_CONFIG_BYTES = 64 * 1024
 #: Deepest nesting of mappings and lists accepted; real configs are about four deep.
 MAX_CONFIG_DEPTH = 16
+#: Most nodes (mappings, lists and scalars) accepted in one config file.
+MAX_CONFIG_NODES = 10000
+#: Longest run of digits read as an integer; longer ones are rejected the same way
+#: on every Python version.
+_MAX_INT_DIGITS = 18
+_YAML_INT = "tag:yaml.org,2002:int"
 
 
 def _read_regular_file(path: str) -> bytes:
@@ -222,6 +230,21 @@ def _read_regular_file(path: str) -> bytes:
     return data
 
 
+def _json_hooks(path: str):
+    """``json.loads`` keyword arguments that refuse over-long integers (NaN and
+    infinity parse as floats and are rejected by name where a number is read)."""
+
+    def parse_int(text: str) -> int:
+        if len(text.lstrip("-")) > _MAX_INT_DIGITS:
+            raise ValueError(f"{path}: a number with too many digits")
+        return int(text)
+
+    return {
+        "object_pairs_hook": _json_object(path),
+        "parse_int": parse_int,
+    }
+
+
 def _json_object(path: str):
     def hook(pairs):
         result: Dict[str, object] = {}
@@ -235,16 +258,35 @@ def _json_object(path: str):
 
 
 def _yaml_loader(path: str):
-    """A SafeLoader that rejects duplicate keys, aliases and merge keys."""
+    """A SafeLoader that rejects duplicate keys, aliases and merge keys, bounds the
+    node count and depth while composing, and reads integers as plain decimals only."""
     import yaml  # type: ignore[import-untyped]
 
     class StrictLoader(yaml.SafeLoader):
+        def __init__(self, stream):  # type: ignore[no-untyped-def]
+            super().__init__(stream)
+            self._nodes = 0
+            self._depth = 0
+
         def compose_node(self, parent, index):  # type: ignore[no-untyped-def]
             if self.check_event(yaml.events.AliasEvent):
                 raise ValueError(
                     f"{path}: YAML aliases are not allowed in config files; write the value out"
                 )
-            return super().compose_node(parent, index)
+            self._nodes += 1
+            if self._nodes > MAX_CONFIG_NODES:
+                raise ValueError(
+                    f"{path} has too many values (limit {MAX_CONFIG_NODES})"
+                )
+            self._depth += 1
+            try:
+                if self._depth > MAX_CONFIG_DEPTH:
+                    raise ValueError(
+                        f"{path} is nested too deeply (limit {MAX_CONFIG_DEPTH} levels)"
+                    )
+                return super().compose_node(parent, index)
+            finally:
+                self._depth -= 1
 
         def construct_mapping(self, node, deep=False):  # type: ignore[no-untyped-def]
             seen = set()
@@ -268,13 +310,30 @@ def _yaml_loader(path: str):
     StrictLoader.add_constructor(
         "tag:yaml.org,2002:timestamp", lambda loader, node: loader.construct_scalar(node)
     )
+    # YAML 1.1 reads 010 as 8, 1:20 as 80 and 0x10 as 16. Only plain decimals
+    # are integers here; everything else stays text and is rejected where a
+    # number is required.
+    StrictLoader.yaml_implicit_resolvers = {
+        first: [(tag, regexp) for tag, regexp in resolvers if tag != _YAML_INT]
+        for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+    StrictLoader.add_implicit_resolver(
+        _YAML_INT,
+        re.compile(r"^[-+]?(?:0|[1-9][0-9]{0,%d})$" % (_MAX_INT_DIGITS - 1)),
+        list("-+0123456789"),
+    )
     return StrictLoader
 
 
 def _check_depth(data: object, path: str) -> None:
+    """Bound nesting depth and total node count of parsed JSON (YAML is bounded while composing)."""
     stack = [(data, 1)]
+    nodes = 0
     while stack:
         item, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_CONFIG_NODES:
+            raise ValueError(f"{path} has too many values (limit {MAX_CONFIG_NODES})")
         if isinstance(item, dict):
             children = list(item.values())
         elif isinstance(item, list):
@@ -309,13 +368,17 @@ def load_config_file(path: str) -> Dict[str, object]:
                     f"{path} is YAML but PyYAML is not installed. "
                     "Install it with 'pip install pyyaml', or use a .json config instead."
                 ) from None
+            loader = _yaml_loader(path)(text)
             try:
-                data = yaml.load(text, Loader=_yaml_loader(path))
+                node = loader.get_single_node()
+                data = loader.construct_document(node) if node is not None else None
             except yaml.YAMLError as exc:
                 raise ValueError(f"{path} is not valid YAML: {exc}") from None
+            finally:
+                loader.dispose()
         else:
             try:
-                data = json.loads(text, object_pairs_hook=_json_object(path))
+                data = json.loads(text, **_json_hooks(path))
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path} is not valid JSON: {exc}") from None
     except RecursionError:
@@ -581,23 +644,19 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
     if "observance" in data:
         config.observance = Observance.parse(str(data["observance"]))
     if "pto_days" in data:
-        config.pto_days = int(data["pto_days"])  # type: ignore[arg-type]
+        config.pto_days = _file_int(data["pto_days"], "pto_days", path)
     if "pto_by_year" in data:
-        raw = data["pto_by_year"]
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path}: 'pto_by_year' must be a mapping of year to days")
-        config.pto_by_year.update({int(k): int(v) for k, v in raw.items()})
+        config.pto_by_year.update(_year_budgets(data["pto_by_year"], "pto_by_year", path))
     if "floating_days" in data:
-        config.floating_days = int(data["floating_days"])  # type: ignore[arg-type]
+        config.floating_days = _file_int(data["floating_days"], "floating_days", path)
     if "floating_by_year" in data:
-        raw = data["floating_by_year"]
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path}: 'floating_by_year' must be a mapping of year to days")
-        config.floating_by_year.update({int(k): int(v) for k, v in raw.items()})
+        config.floating_by_year.update(
+            _year_budgets(data["floating_by_year"], "floating_by_year", path)
+        )
     if "carryover" in data:
-        config.carryover = int(data["carryover"])  # type: ignore[arg-type]
+        config.carryover = _file_int(data["carryover"], "carryover", path)
     if "min_break" in data:
-        config.min_break = int(data["min_break"])  # type: ignore[arg-type]
+        config.min_break = _file_int(data["min_break"], "min_break", path)
         config.min_break_explicit = True
     if "goal" in data:
         if not isinstance(data["goal"], str):
@@ -610,16 +669,13 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
     if "prefer" in data:
         config.prefer |= parse_date_ranges(str(v) for v in _as_list(data["prefer"]))
     if "max_consecutive_pto" in data:
-        config.max_consecutive_pto = int(data["max_consecutive_pto"])  # type: ignore[arg-type]
+        config.max_consecutive_pto = _file_int(data["max_consecutive_pto"], "max_consecutive_pto", path)
     if "min_return" in data:
         config.min_return = _file_number(data["min_return"], "min_return", path)
     if "target_days_off" in data:
-        number = _file_number(data["target_days_off"], "target_days_off", path)
-        if not math.isfinite(number) or number != int(number):
-            raise ValueError(f"{path}: 'target_days_off' must be a whole number (got {number})")
-        config.target_days_off = int(number)
+        config.target_days_off = _file_int(data["target_days_off"], "target_days_off", path)
     if "conference_travel" in data:
-        config.conference_travel = int(data["conference_travel"])  # type: ignore[arg-type]
+        config.conference_travel = _file_int(data["conference_travel"], "conference_travel", path)
     if "blackout" in data:
         config.blackout |= parse_date_ranges(str(v) for v in _as_list(data["blackout"]))
     if "committed" in data:
@@ -630,16 +686,46 @@ def _file_number(value: object, key: str, path: str) -> float:
     """A number from a config file; null, booleans and text are errors, not zero."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path}: {key!r} must be a number (got {value!r})")
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        raise ValueError(f"{path}: {key!r} is too large (got a {len(str(value))}-digit number)") from None
 
 
 def _file_int(value: object, key: str, path: str) -> int:
-    """A whole number from a config file; null, booleans, text and fractions are errors."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{path}: {key!r} must be a whole number (got {value!r})")
-    if isinstance(value, float) and (not math.isfinite(value) or value != int(value)):
-        raise ValueError(f"{path}: {key!r} must be a whole number (got {value!r})")
-    return int(value)
+    """A whole number from a config file.
+
+    Null, booleans, text (including YAML 1.1 forms such as 010 or 1:20),
+    fractions, nan, infinity and absurdly large values are errors.
+    """
+    if isinstance(value, str):
+        raise ValueError(
+            f"{path}: {key!r} must be a whole number written in plain decimal, "
+            f"like 17 (got {value!r})"
+        )
+    return whole_number(value, f"{path}: {key!r}")
+
+
+_YEAR_KEY = re.compile(r"^[0-9]{1,8}$")
+
+
+def _year_budgets(raw: object, key: str, path: str) -> Dict[int, int]:
+    """``{year: days}`` from a config file; years that normalize to one collide."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: {key!r} must be a mapping of year to days")
+    result: Dict[int, int] = {}
+    for year_key, days in raw.items():
+        if isinstance(year_key, bool) or not (
+            isinstance(year_key, int) or (isinstance(year_key, str) and _YEAR_KEY.match(year_key))
+        ):
+            raise ValueError(f"{path}: {key!r} has a year key that is not a year: {year_key!r}")
+        year = int(year_key)
+        if not 1 <= year <= 9999:
+            raise ValueError(f"{path}: {key!r} has a year key out of range: {year_key!r}")
+        if year in result:
+            raise ValueError(f"{path}: year {year} appears more than once in {key!r}")
+        result[year] = _file_int(days, f"{key}[{year}]", path)
+    return result
 
 
 def _as_list(value: object) -> List[object]:

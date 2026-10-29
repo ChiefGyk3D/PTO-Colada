@@ -402,7 +402,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             diaspora=not args.israel,
             include_erev=args.erev,
         )
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError, OverflowError) as exc:
         parser.error(str(exc))
         return 2  # pragma: no cover - parser.error exits
 

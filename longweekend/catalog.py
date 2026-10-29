@@ -528,6 +528,22 @@ def _parse_when(name: str, when: str) -> Rule:
     )
 
 
+#: Largest magnitude accepted for a whole number read from a config file.
+MAX_FILE_INTEGER = 1_000_000
+
+
+def whole_number(value: object, label: str) -> int:
+    """A whole number from a config file; null, booleans, text, fractions and
+    non-finite or absurdly large values are errors."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a whole number (got {value!r})")
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        raise ValueError(f"{label} must be a whole number (got {value!r})")
+    if value != int(value) or abs(value) > MAX_FILE_INTEGER:
+        raise ValueError(f"{label} must be a whole number of reasonable size (got {value!r})")
+    return int(value)
+
+
 def rule_from_mapping(data: Dict[str, object]) -> Rule:
     """Build a rule from a config-file mapping."""
     rule = _rule_from_mapping(data)
@@ -561,7 +577,7 @@ def _rule_from_mapping(data: Dict[str, object]) -> Rule:
         return _parse_when(name, str(value))
     if "after" in data or "before" in data:
         anchor = str(data.get("after") or data["before"])
-        offset = int(data.get("days", 1))
+        offset = whole_number(data.get("days", 1), f"holiday {name!r}: 'days'")
         if "before" in data and not data.get("after"):
             offset = -abs(offset)
         return RelativeTo(name=name, anchor=anchor, offset=offset)
@@ -569,7 +585,7 @@ def _rule_from_mapping(data: Dict[str, object]) -> Rule:
         if "month" not in data:
             raise ValueError(f"holiday {name!r}: 'weekday' requires 'month'")
         n = data.get("n", data.get("nth", 1))
-        n = -1 if str(n).lower() == "last" else int(n)
+        n = -1 if str(n).lower() == "last" else whole_number(n, f"holiday {name!r}: 'n'")
         return NthWeekday(
             name=name,
             month=parse_month(data["month"]),  # type: ignore[arg-type]
@@ -577,7 +593,7 @@ def _rule_from_mapping(data: Dict[str, object]) -> Rule:
             n=n,
         )
     if "month" in data and "day" in data:
-        month, day = parse_month(data["month"]), int(data["day"])  # type: ignore[arg-type]
+        month, day = parse_month(data["month"]), whole_number(data["day"], f"holiday {name!r}: 'day'")  # type: ignore[arg-type]
         _validate_month_day(name, month, day)
         return FixedDate(name=name, month=month, day=day)
 
