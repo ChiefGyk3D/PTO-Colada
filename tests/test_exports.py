@@ -225,7 +225,7 @@ class TestMissingOpenpyxl:
             main(ARGS + ["--export-xlsx", str(xlsx), "--export-ics", str(ics)])
         assert info.value.code == 2
         err = capsys.readouterr().err
-        assert "openpyxl" in err and "long-weekend-planner[xlsx]" in err
+        assert "openpyxl" in err and "pto-colada[xlsx]" in err
         assert not xlsx.exists() and not ics.exists()
 
     def test_core_import_does_not_need_openpyxl(self, monkeypatch):

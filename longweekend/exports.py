@@ -43,7 +43,7 @@ __all__ = [
 
 XLSX_HINT = (
     "--export-xlsx needs the optional openpyxl package: "
-    "pip install 'long-weekend-planner[xlsx]'"
+    "pip install 'pto-colada[xlsx]'"
 )
 
 CSV_HEADER = ["kind", "start", "end", "length_days", "pto_cost", "efficiency", "description"]

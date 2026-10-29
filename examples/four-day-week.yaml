@@ -1,5 +1,5 @@
 # A company on a four-day week with a Sunday-Thursday schedule.
-# Requires PyYAML:  pip install "long-weekend-planner[yaml]"
+# Requires PyYAML:  pip install "pto-colada[yaml]"
 name: Globex (Sun-Thu, 4-day week)
 workweek: SUN-WED
 observance: next

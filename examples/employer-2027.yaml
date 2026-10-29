@@ -1,5 +1,5 @@
 # A generic employer's paid days for 2027, as explicit dates with a status.
-# Requires PyYAML:  pip install "long-weekend-planner[yaml]"   (a JSON twin,
+# Requires PyYAML:  pip install "pto-colada[yaml]"   (a JSON twin,
 # employer-2027.json, needs nothing).
 #
 # status is one of:

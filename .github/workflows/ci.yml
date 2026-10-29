@@ -1,6 +1,6 @@
 # Lint, tests on Python 3.8-3.13, a CLI smoke test, and the shared security
 # checks. The jobs live in ChiefGyk3D/git-your-ship-together; this file only
-# says what is specific to Long Weekend Planner. `CI green` at the end is the
+# says what is specific to PTO Colada. `CI green` at the end is the
 # one check to require in branch protection.
 name: CI
 
@@ -46,6 +46,8 @@ jobs:
       smoke-install-command: pip install ".[yaml]"
       smoke-command: |
         python holiday.py --years 1
+        pto-colada --help > /dev/null
+        long-weekend --help > /dev/null
         python -m longweekend.cli --pto 15 --format json > /dev/null
         python -m longweekend.cli --pto 15 --format ics > /dev/null
         python -m longweekend.cli --list-known > /dev/null

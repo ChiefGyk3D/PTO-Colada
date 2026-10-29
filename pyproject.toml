@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "long-weekend-planner"
+name = "pto-colada"
 version = "1.1.0"
 description = "Find long weekends and plan PTO around the holidays your employer actually observes."
 readme = "README.md"
@@ -24,7 +24,13 @@ xlsx = ["openpyxl>=3.1"]
 dev = ["pytest>=7.0", "PyYAML>=5.1", "openpyxl>=3.1"]
 
 [project.scripts]
-long-weekend = "longweekend.cli:main"
+pto-colada = "longweekend.cli:main"
+long-weekend = "longweekend.cli:main"   # alias kept so existing installs keep working
+
+[project.urls]
+Homepage = "https://github.com/ChiefGyk3D/PTO-Colada"
+Repository = "https://github.com/ChiefGyk3D/PTO-Colada"
+Issues = "https://github.com/ChiefGyk3D/PTO-Colada/issues"
 
 [tool.setuptools]
 packages = ["longweekend"]

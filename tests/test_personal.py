@@ -287,7 +287,7 @@ class TestWizard:
         argv, output = self.run([""] * 10)
         assert "--pto" in argv
         assert main(argv) == 0
-        assert "long-weekend" in output
+        assert "pto-colada" in output
 
     def test_answers_become_flags(self):
         argv, _ = self.run(["20", "3", "5", "corporate", "Yom Kippur", "DEF CON", "2", "vacations", "3"])
@@ -312,4 +312,4 @@ class TestWizard:
     def test_it_prints_the_equivalent_command(self):
         _, output = self.run(["20"] + [""] * 9)
         assert "Next time, skip the questions:" in output
-        assert "long-weekend --pto 20" in output
+        assert "pto-colada --pto 20" in output

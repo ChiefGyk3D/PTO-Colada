@@ -844,7 +844,7 @@ def render_ics(
     lines: List[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Long Weekend Planner//EN",
+        "PRODID:-//PTO Colada//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_escape(config.name)} time off" + (" (PROVISIONAL)" if assumptions or personal else ""),

@@ -1,4 +1,4 @@
-"""Long Weekend Planner: find long weekends and plan PTO around them."""
+"""PTO Colada: find long weekends and plan PTO around them."""
 
 from .catalog import PRESETS, Observance, ResolvedHoliday, resolve_year
 from .conferences import Conference, ConferenceOccurrence, load_conferences

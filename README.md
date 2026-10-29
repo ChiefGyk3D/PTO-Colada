@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/pto-colada-logo.png" width="360" alt="PTO Colada"></p>
 
-# Long Weekend Planner
+# PTO Colada
 
 Find the long weekends hiding in your calendar, and plan a year (or two) of PTO
 around them.
@@ -11,7 +11,7 @@ four-day break, and — if you tell it how many PTO days you get — the best wa
 to spend the whole year's allowance.
 
 ```
-$ long-weekend --preset corporate --pto 15
+$ pto-colada --preset corporate --pto 15
 
 corporate - 12 holidays, Mon-Fri workweek, nearest working day observance
 
@@ -54,7 +54,8 @@ No runtime dependencies — the standard library is enough.
 pip install -e .
 ```
 
-That gives you the `long-weekend` command. You can also run it without
+That gives you the `pto-colada` command. `long-weekend` still works as an alias
+(PTO Colada was called Long Weekend Planner before the rename). You can also run it without
 installing, either as `python3 -m longweekend.cli` or through the original
 `python3 holiday.py` entry point, which still accepts its old arguments.
 
@@ -65,7 +66,7 @@ PyYAML is optional, and only needed for `.yaml` company configs:
 ## Usage
 
 ```
-long-weekend [options]
+pto-colada [options]
 ```
 
 With no arguments it reports the US federal holidays for **the current year and
@@ -73,10 +74,10 @@ the next one**, and what each is worth. The window follows the clock; nothing is
 hard-coded to a particular year.
 
 ```
-long-weekend                          # this year and next
-long-weekend --years 3                # this year plus the next two
-long-weekend --start-year 2030 --end-year 2032
-long-weekend --from-today             # skip days that have already passed
+pto-colada                          # this year and next
+pto-colada --years 3                # this year plus the next two
+pto-colada --start-year 2030 --end-year 2032
+pto-colada --from-today             # skip days that have already passed
 ```
 
 ## Planning from today, in hours
@@ -86,7 +87,7 @@ bank refills on January 1, and I want a break in March." Give the balance in
 hours and the tool plans the rest of the horizon, across the new year.
 
 ```
-long-weekend --today 2026-11-02 --pto-hours 36 --refill-hours 120 \
+pto-colada --today 2026-11-02 --pto-hours 36 --refill-hours 120 \
   --carryover 5 --through 2027-03-31 --commit 2027-03-15:2027-03-19
 ```
 
@@ -122,7 +123,7 @@ No two employers close for the same days, so nothing is baked in. Start from a
 preset and adjust it, or describe your company in a config file.
 
 ```
-long-weekend --list-presets
+pto-colada --list-presets
 ```
 
 | Preset | What it is |
@@ -147,9 +148,9 @@ actually gets which day.) That is what `--add` and `--drop` are for.
 Holidays the tool already knows can be added by name alone — no date needed:
 
 ```
-long-weekend --list-known                        # the whole catalog
-long-weekend --add "Good Friday" --add "Election Day"
-long-weekend --preset minimal --add "Black Friday" --add "Christmas Eve"
+pto-colada --list-known                        # the whole catalog
+pto-colada --add "Good Friday" --add "Election Day"
+pto-colada --preset minimal --add "Black Friday" --add "Christmas Eve"
 ```
 
 The catalog covers the eleven federal holidays plus the days employers commonly
@@ -162,13 +163,13 @@ Two names for the same day are rejected rather than silently observed twice, so
 if you prefer Indigenous Peoples' Day, swap it in:
 
 ```
-long-weekend --drop "Columbus Day" --add "Indigenous Peoples' Day"
+pto-colada --drop "Columbus Day" --add "Indigenous Peoples' Day"
 ```
 
 Adjust a preset with `--add` and `--drop`:
 
 ```
-long-weekend --preset federal \
+pto-colada --preset federal \
   --drop "Columbus Day,Veterans Day" \
   --add "Day After Thanksgiving=Thanksgiving+1" \
   --add "Christmas Eve=12-24" \
@@ -221,9 +222,9 @@ rather than disappearing.
 it — including which days count as a "weekend" for observance purposes.
 
 ```
-long-weekend --workweek SUN-THU        # Sunday to Thursday
-long-weekend --workweek MON-THU        # four-day week
-long-weekend --workweek MON,WED,FRI    # explicit days
+pto-colada --workweek SUN-THU        # Sunday to Thursday
+pto-colada --workweek MON-THU        # four-day week
+pto-colada --workweek MON,WED,FRI    # explicit days
 ```
 
 The workweek is one fixed set of weekdays, the same every week. That covers a
@@ -288,7 +289,7 @@ Config errors may quote the value you wrote and the file's path; do not paste
 them into public places if the file holds private data.
 
 ```
-long-weekend --config examples/acme.json --pto 20
+pto-colada --config examples/acme.json --pto 20
 ```
 
 ## Planning PTO
@@ -296,9 +297,9 @@ long-weekend --config examples/acme.json --pto 20
 Pass `--pto` and the planner works out which working days to take.
 
 ```
-long-weekend --pto 15
-long-weekend --pto 15 --pto-year 2027=20     # a different budget next year
-long-weekend --pto 15 --carryover 5          # unused days roll forward
+pto-colada --pto 15
+pto-colada --pto 15 --pto-year 2027=20     # a different budget next year
+pto-colada --pto 15 --carryover 5          # unused days roll forward
 ```
 
 ### Floating holidays
@@ -309,9 +310,9 @@ PTO: they are granted per calendar year, and they expire on December 31 rather
 than rolling over.
 
 ```
-long-weekend --pto 15 --floating 2
-long-weekend --floating 3                    # floating days alone; no PTO
-long-weekend --pto 15 --floating 2 --floating-year 2027=3
+pto-colada --pto 15 --floating 2
+pto-colada --floating 3                    # floating days alone; no PTO
+pto-colada --pto 15 --floating 2 --floating-year 2027=3
 ```
 
 The planner schedules both pools together, since a day off is a day off, but it
@@ -351,10 +352,10 @@ little. These options measure that and let you stop earlier. They all need
 `--pto` as the ceiling.
 
 ```
-long-weekend --pto 17 --efficiency            # score the plan
-long-weekend --pto 17 --curve                 # budget against days in breaks
-long-weekend --pto 17 --min-return 2.5        # stop when a day returns under 2.5
-long-weekend --pto 17 --target-days-off 40    # the fewest PTO days that reach 40
+pto-colada --pto 17 --efficiency            # score the plan
+pto-colada --pto 17 --curve                 # budget against days in breaks
+pto-colada --pto 17 --min-return 2.5        # stop when a day returns under 2.5
+pto-colada --pto 17 --target-days-off 40    # the fewest PTO days that reach 40
 ```
 
 **Days off** here means *days in breaks*: days that fall inside a break of at
@@ -377,7 +378,7 @@ point just before the first step that earns less. For the federal preset in
 2027 with `--min-break 4`:
 
 ```
-$ long-weekend --start-year 2027 --years 1 --min-break 4 --pto 17 --curve
+$ pto-colada --start-year 2027 --years 1 --min-break 4 --pto 17 --curve
   Budget  PTO spent  Days in breaks  Last day returned  Days per PTO
        0          0               0                  -             -
        1          1               4                4.0           4.0
@@ -433,8 +434,8 @@ Once the obvious holiday bridges are bought, the leftover budget has to go
 somewhere, and there is no universally right answer — so it is a flag:
 
 ```
-long-weekend --pto 15 --style weekends    # default: as many long weekends as possible
-long-weekend --pto 15 --style vacations   # consolidate leftovers into longer trips
+pto-colada --pto 15 --style weekends    # default: as many long weekends as possible
+pto-colada --pto 15 --style vacations   # consolidate leftovers into longer trips
 ```
 
 With 15 days against the `corporate` preset in 2026, `weekends` produces
@@ -485,7 +486,7 @@ If any day in the window is not confirmed, the result is labeled
 and the unconfirmed days are listed.
 
 ```
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1
 ```
 
 ### How days off are counted
@@ -513,10 +514,10 @@ Pass any of these and the planner scores by the rules above instead of the
 classic days-in-breaks score. They need a PTO budget.
 
 ```
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal vacations --min-vacation-days 9
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --prefer 2027-08-13 --blackout 2027-03-01:2027-03-12
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal vacations --min-vacation-days 9
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --prefer 2027-08-13 --blackout 2027-03-01:2027-03-12
 ```
 
 | Goal | What a PTO break of `L` days is worth |
@@ -575,7 +576,7 @@ To score your own set of dates, commit them in full and let the planner have
 no choice:
 
 ```
-long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --commit 2027-01-04 --commit 2027-12-27:2027-12-30
+pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --commit 2027-01-04 --commit 2027-12-27:2027-12-30
 ```
 
 ### Assumptions awaiting confirmation
@@ -593,9 +594,9 @@ the arithmetic gets honest, and the planner starts building around them instead
 of ignoring them.
 
 ```
-long-weekend --pto 15 --observe jewish
-long-weekend --pto 15 --observe "Yom Kippur" --observe "Passover"
-long-weekend --pto 15 --observe 2026-07-20        # any date you already know
+pto-colada --pto 15 --observe jewish
+pto-colada --pto 15 --observe "Yom Kippur" --observe "Passover"
+pto-colada --pto 15 --observe 2026-07-20        # any date you already know
 ```
 
 Each one is charged to your budget unless it lands on a weekend or a day the
@@ -638,8 +639,8 @@ would expect.
 Two flags for the details that matter:
 
 ```
-long-weekend --observe jewish --israel   # one festival day, not two
-long-weekend --observe jewish --erev     # also take the day it begins at sunset
+pto-colada --observe jewish --israel   # one festival day, not two
+pto-colada --observe jewish --erev     # also take the day it begins at sunset
 ```
 
 A Hebrew day starts at sunset, so every holiday actually begins the evening
@@ -652,9 +653,9 @@ already booked.
 Muslim holidays are opt-in, like the Jewish ones, and work the same way:
 
 ```
-long-weekend --pto 15 --observe muslim
-long-weekend --pto 15 --observe "Eid al-Fitr" --observe "Eid al-Adha"
-long-weekend --pto 15 --observe jewish --observe muslim   # both sets, if both apply
+pto-colada --pto 15 --observe muslim
+pto-colada --pto 15 --observe "Eid al-Fitr" --observe "Eid al-Adha"
+pto-colada --pto 15 --observe jewish --observe muslim   # both sets, if both apply
 ```
 
 | Set | What it books |
@@ -717,9 +718,9 @@ communities); use a config date for yours.
 ### Security conferences
 
 ```
-long-weekend --list-conferences
-long-weekend --pto 15 --conference "DEF CON" --conference-travel 1
-long-weekend --pto 20 --conference defcon --conference ccc
+pto-colada --list-conferences
+pto-colada --pto 15 --conference "DEF CON" --conference-travel 1
+pto-colada --pto 20 --conference defcon --conference ccc
 ```
 
 The bundled catalog knows DEF CON, Black Hat USA and Europe, BSides Las Vegas,
@@ -739,7 +740,7 @@ rather than inventing a date. Anything bundled will go stale eventually, so
 bring your own:
 
 ```
-long-weekend --conferences my-cons.json --conference "My Local Con"
+pto-colada --conferences my-cons.json --conference "My Local Con"
 ```
 
 Same format as [the bundled file](longweekend/data/conferences.json); your
@@ -752,7 +753,7 @@ you.
 ## Not sure where to start
 
 ```
-long-weekend --interactive
+pto-colada --interactive
 ```
 
 Seven questions, then the plan — and the command line that would have produced
@@ -761,15 +762,15 @@ it, so you never have to answer them again:
 ```
 Next time, skip the questions:
 
-    long-weekend --pto 20 --floating 2 --observe jewish --conference "DEF CON"
+    pto-colada --pto 20 --floating 2 --observe jewish --conference "DEF CON"
 ```
 
 ## Output formats
 
 ```
-long-weekend --pto 15 --format text     # default
-long-weekend --pto 15 --format json     # for scripting
-long-weekend --pto 15 --format ics > timeoff.ics
+pto-colada --pto 15 --format text     # default
+pto-colada --pto 15 --format json     # for scripting
+pto-colada --pto 15 --format ics > timeoff.ics
 ```
 
 The `.ics` file contains an all-day event for every holiday, every planned PTO
@@ -784,10 +785,10 @@ Each export is written by one flag, and they can be combined. The plan still
 prints to the terminal as usual; each file is reported on stderr.
 
 ```
-long-weekend --pto 15 --export-ics timeoff.ics        # import as a NEW calendar
-long-weekend --pto 15 --export-csv timeoff.csv        # breaks and PTO days
-long-weekend --pto 15 --export-xlsx timeoff.xlsx      # summary sheet and charts
-long-weekend --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
+pto-colada --pto 15 --export-ics timeoff.ics        # import as a NEW calendar
+pto-colada --pto 15 --export-csv timeoff.csv        # breaks and PTO days
+pto-colada --pto 15 --export-xlsx timeoff.xlsx      # summary sheet and charts
+pto-colada --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
 ```
 
 - `--export-ics FILE`: an `.ics` named "<company> time off" (`X-WR-CALNAME`),
@@ -810,7 +811,7 @@ The workbook needs the optional extra; without it the command stops with
 a message naming the install line and writes nothing:
 
 ```
-pip install -e ".[xlsx]"        # or: pip install 'long-weekend-planner[xlsx]'
+pip install -e ".[xlsx]"        # or: pip install 'pto-colada[xlsx]'
 ```
 
 Files are written atomically (a temporary file in the same directory, then a

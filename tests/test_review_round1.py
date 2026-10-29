@@ -199,7 +199,7 @@ def _readme_commands():
     commands = []
     for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.S):
         for line in block.splitlines():
-            if line.startswith("long-weekend") and "employer-2027" in line:
+            if line.startswith("pto-colada") and "employer-2027" in line:
                 commands.append(line.split("#", 1)[0].strip())
     return text, commands
 
