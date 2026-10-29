@@ -947,6 +947,8 @@ def _event(
     uid = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:40]
     return [
         "BEGIN:VEVENT",
+        # The domain is a frozen identifier, not the product name: clients match
+        # events by UID, so changing it would duplicate every imported event.
         f"UID:{uid}@long-weekend-planner",
         f"DTSTAMP:{stamp}",
         f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}",
