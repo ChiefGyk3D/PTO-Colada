@@ -60,6 +60,10 @@ That gives you the `pto-colada` command. `long-weekend` still works as an alias
 shim). You can also run it without installing, either as `python3 -m pto_colada.cli` or through the original
 `python3 holiday.py` entry point, which still accepts its old arguments.
 
+Upgrading from the old `long-weekend-planner` distribution? Run
+`pip uninstall long-weekend-planner` first; installed next to `pto-colada` it
+overlaps the `longweekend` package and the `long-weekend` script.
+
 PyYAML is optional, and only needed for `.yaml` company configs:
 `pip install -e ".[yaml]"`. The Excel export needs `openpyxl`:
 `pip install -e ".[xlsx]"`.
