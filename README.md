@@ -430,6 +430,17 @@ as `--pto` grows. Budgets past the working days in a year are not replanned
 (they cannot change anything), but a ceiling in the hundreds across several
 years still takes about a minute.
 
+`--max-work-streak` applies to the curve too: `--curve`, the stop options and the
+xlsx Return curve chart all describe plans that meet the limit, and budgets that
+cannot meet it are left off the curve. The one-pass shortcut cannot track working
+streaks, so a curve under the limit replans every budget (roughly a second each
+over a long horizon). When more than 10 budgets must be replanned, a line on
+stderr says so before the work starts; stdout is unchanged. If the curve is only
+wanted for `--export-xlsx` and would replan more than 120 budgets, the workbook
+is written without the Return curve sheet and chart, with a note on stderr; add
+`--curve` to compute it anyway. There is no step option to thin the curve: the
+knee and the stop conditions read every budget.
+
 `--min-return` and `--target-days-off` are alternatives; both also accept
 `min_return` and `target_days_off` in a config file.
 

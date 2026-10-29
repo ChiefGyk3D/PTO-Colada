@@ -12,7 +12,9 @@ from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
 from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
 from .config import CompanyConfig, _bounded_date, build_config
-from .efficiency import ReturnCurve, return_curve
+from .efficiency import (
+    REPLAN_MAX_BUDGETS, REPLAN_WARN_BUDGETS, ReturnCurve, replan_count, return_curve,
+)
 from .exports import ExportError, write_exports
 from .goals import GOALS, PAD_DAYS, build_goal_days, goal_spec, optimize_goal
 from .honest import score_pto
@@ -578,7 +580,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         long_break_bonus = 1 if args.style == "vacations" else 0
         try:
-            if wants_curve or args.export_xlsx:
+            replans = replan_count(days, budget, max_work_streak=args.max_work_streak)
+            build_curve = wants_curve or bool(args.export_xlsx)
+            if build_curve and not wants_curve and replans > REPLAN_MAX_BUDGETS:
+                # Only the workbook wants it, so drop it rather than run unbounded.
+                print(
+                    f"pto-colada: skipping the Return curve sheet and chart: under "
+                    f"--max-work-streak it would replan {replans} budgets (limit "
+                    f"{REPLAN_MAX_BUDGETS}). Use --curve to compute it anyway.",
+                    file=sys.stderr,
+                )
+                build_curve = False
+            elif build_curve and replans > REPLAN_WARN_BUDGETS:
+                print(
+                    f"pto-colada: computing the return curve under --max-work-streak "
+                    f"replans every budget ({replans}); this can take a while.",
+                    file=sys.stderr,
+                )
+            if build_curve:
                 curve = return_curve(
                     days,
                     budget,

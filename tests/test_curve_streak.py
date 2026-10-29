@@ -180,3 +180,119 @@ def test_cli_xlsx_chart_uses_the_limit(tmp_path, capsys):
     free = cli_json(capsys, *HORIZON, "--curve")["curve"]["points"]
     assert [r[:3] for r in rows] == [(p["budget"], p["pto_spent"], p["days_in_breaks"]) for p in limited]
     assert [r[:3] for r in rows] != [(p["budget"], p["pto_spent"], p["days_in_breaks"]) for p in free]
+
+
+# --- cost guard: warning and the xlsx cap (round 2) ---------------------------------
+
+import pto_colada.cli as cli_module  # noqa: E402
+import pto_colada.efficiency as efficiency_module  # noqa: E402
+from pto_colada.efficiency import REPLAN_MAX_BUDGETS, REPLAN_WARN_BUDGETS, replan_count  # noqa: E402
+
+SMALL = ["--today", "2026-11-02", "--pto-hours", "400", "--refill-hours", "120",
+         "--through", "2027-03-31", "--max-work-streak", "8"]
+WARNING = "replans every budget"
+
+
+def small_count():
+    days = federal_year_days()
+    return replan_count(days, PtoBudget(default=14), max_work_streak=10)
+
+
+def test_the_cost_constants_are_sane():
+    assert 1 <= REPLAN_WARN_BUDGETS < REPLAN_MAX_BUDGETS
+
+
+def test_replan_count_is_the_number_of_planner_runs(monkeypatch):
+    days = federal_year_days()
+    budget = PtoBudget(default=14)
+    calls = []
+    real = efficiency_module.optimize_pto
+    monkeypatch.setattr(efficiency_module, "optimize_pto",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+    curve = return_curve(days, budget, min_break=4, max_work_streak=10)
+    assert len(calls) == replan_count(days, budget, max_work_streak=10)
+    assert curve.points
+
+
+def test_no_replan_without_a_limit():
+    assert replan_count(federal_year_days(), PtoBudget(default=14)) == 0
+
+
+def run_cli(capsys, *argv):
+    code = main(list(argv))
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_warning_fires_only_above_the_threshold(monkeypatch, capsys):
+    n = replan_count_for(SMALL, capsys)
+    monkeypatch.setattr(cli_module, "REPLAN_WARN_BUDGETS", n)  # exactly n: no warning
+    _, _, err = run_cli(capsys, *SMALL, "--curve", "--format", "json")
+    assert WARNING not in err
+    monkeypatch.setattr(cli_module, "REPLAN_WARN_BUDGETS", n - 1)  # n > threshold: warning
+    _, out, err = run_cli(capsys, *SMALL, "--curve", "--format", "json")
+    assert err.count(WARNING) == 1
+    json.loads(out)  # stdout is still pure JSON
+
+
+class _Stop(Exception):
+    pass
+
+
+def replan_count_for(argv, capsys):
+    """Budgets the CLI would replan for ``argv``, read off the real call, without planning."""
+    seen = []
+    real_count, real_curve = cli_module.replan_count, cli_module.return_curve
+
+    def stop(*_a, **_k):
+        raise _Stop
+
+    cli_module.replan_count = lambda *a, **k: seen.append(real_count(*a, **k)) or seen[-1]
+    cli_module.return_curve = stop
+    try:
+        with pytest.raises(_Stop):
+            main(list(argv) + ["--curve", "--format", "json"])
+    finally:
+        cli_module.replan_count, cli_module.return_curve = real_count, real_curve
+    capsys.readouterr()
+    assert seen and seen[0] > 1
+    return seen[0]
+
+
+def test_no_warning_and_no_stderr_by_default(capsys):
+    _, _, err = run_cli(capsys, *HORIZON, "--curve", "--format", "json")
+    assert WARNING not in err
+
+
+def test_xlsx_curve_is_skipped_above_the_cap_with_a_note(tmp_path, monkeypatch, capsys):
+    openpyxl = pytest.importorskip("openpyxl")
+    n = replan_count_for(SMALL, capsys)
+    out = tmp_path / "p.xlsx"
+    monkeypatch.setattr(cli_module, "REPLAN_MAX_BUDGETS", n - 1)
+    code, stdout, err = run_cli(capsys, *SMALL, "--export-xlsx", str(out), "--format", "json")
+    assert code == 0
+    assert "Return curve" not in openpyxl.load_workbook(out).sheetnames
+    assert "skipping the Return curve" in err
+    json.loads(stdout)  # stdout unchanged
+
+
+def test_xlsx_curve_is_kept_at_the_cap(tmp_path, monkeypatch, capsys):
+    openpyxl = pytest.importorskip("openpyxl")
+    n = replan_count_for(SMALL, capsys)
+    out = tmp_path / "p.xlsx"
+    monkeypatch.setattr(cli_module, "REPLAN_MAX_BUDGETS", n)
+    _, _, err = run_cli(capsys, *SMALL, "--export-xlsx", str(out), "--format", "json")
+    assert "Return curve" in openpyxl.load_workbook(out).sheetnames
+    assert "skipping the Return curve" not in err
+
+
+def test_an_explicit_curve_is_never_skipped_by_the_cap(tmp_path, monkeypatch, capsys):
+    openpyxl = pytest.importorskip("openpyxl")
+    n = replan_count_for(SMALL, capsys)
+    out = tmp_path / "p.xlsx"
+    monkeypatch.setattr(cli_module, "REPLAN_MAX_BUDGETS", n - 1)
+    _, stdout, err = run_cli(capsys, *SMALL, "--curve", "--export-xlsx", str(out),
+                             "--format", "json")
+    assert json.loads(stdout)["curve"]["points"]
+    assert "Return curve" in openpyxl.load_workbook(out).sheetnames
+    assert "skipping the Return curve" not in err

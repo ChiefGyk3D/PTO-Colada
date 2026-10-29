@@ -29,7 +29,16 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, 
 from .planner import PtoBudget, PtoPlan, _extend, optimize_pto
 from .schedule import Day, DayKind
 
-__all__ = ["CurvePoint", "ReturnCurve", "capped_budget", "return_curve"]
+__all__ = [
+    "CurvePoint", "REPLAN_MAX_BUDGETS", "REPLAN_WARN_BUDGETS", "ReturnCurve",
+    "capped_budget", "replan_count", "return_curve",
+]
+
+#: A curve that must replan more budgets than this is slow enough to warn about.
+REPLAN_WARN_BUDGETS = 10
+#: The xlsx export drops a Return curve that would replan more budgets than this
+#: (about a second each); ``--curve`` and the stop options still compute it.
+REPLAN_MAX_BUDGETS = 120
 
 _EPSILON = 1e-9
 
@@ -424,6 +433,52 @@ def _offer(
         into[key] = candidate
 
 
+def _ceiling_and_usable(
+    days: Sequence[Day], budget: PtoBudget, max_budget: Optional[int]
+) -> Tuple[List[int], int, int]:
+    """The curve's years, its ceiling, and the budget past which plans stop changing."""
+    years = sorted({d.date.year for d in days})
+    ceiling = max_budget if max_budget is not None else max(
+        (budget.for_year(year) for year in years), default=budget.default
+    )
+
+    # No year can take more PTO than it has working days, so once the cap
+    # reaches that every larger budget plans identically. That holds only
+    # when a year's allowance does not depend on the cap beyond its own grant:
+    # with carryover, a year granted fewer days than it has working days lives
+    # off days rolled from the year before, and those exist only while the cap
+    # leaves that earlier year unused days. Then every budget is computed.
+    # Likewise a cap at or above every grant leaves the budget unchanged.
+    workdays = {
+        y: sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
+        for y in years
+    }
+    skippable = budget.carryover == 0 or all(
+        budget.for_year(y) >= workdays[y] for y in years
+    )
+    usable = max(workdays.values(), default=0) if skippable else ceiling + 1
+    if years:
+        usable = min(usable, max(budget.for_year(y) for y in years))
+    return years, ceiling, usable
+
+
+def replan_count(
+    days: Sequence[Day],
+    budget: PtoBudget,
+    max_budget: Optional[int] = None,
+    max_work_streak: Optional[int] = None,
+) -> int:
+    """How many budgets :func:`return_curve` must replan with the planner.
+
+    Zero when the curve comes from the one pass (no ``max_work_streak``). With
+    a limit every budget up to the point where plans stop changing is planned.
+    """
+    if max_work_streak is None or not days:
+        return 0
+    _years, ceiling, usable = _ceiling_and_usable(days, budget, max_budget)
+    return min(ceiling, usable) + 1
+
+
 def return_curve(
     days: Sequence[Day],
     budget: PtoBudget,
@@ -453,28 +508,7 @@ def return_curve(
     cannot meet the limit are left off the curve; if the ceiling cannot meet
     it, the planner's error is raised.
     """
-    years = sorted({d.date.year for d in days})
-    ceiling = max_budget if max_budget is not None else max(
-        (budget.for_year(year) for year in years), default=budget.default
-    )
-
-    # No year can take more PTO than it has working days, so once the cap
-    # reaches that every larger budget plans identically. That holds only
-    # when a year's allowance does not depend on the cap beyond its own grant:
-    # with carryover, a year granted fewer days than it has working days lives
-    # off days rolled from the year before, and those exist only while the cap
-    # leaves that earlier year unused days. Then every budget is computed.
-    # Likewise a cap at or above every grant leaves the budget unchanged.
-    workdays = {
-        y: sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
-        for y in years
-    }
-    skippable = budget.carryover == 0 or all(
-        budget.for_year(y) >= workdays[y] for y in years
-    )
-    usable = max(workdays.values(), default=0) if skippable else ceiling + 1
-    if years:
-        usable = min(usable, max(budget.for_year(y) for y in years))
+    years, ceiling, usable = _ceiling_and_usable(days, budget, max_budget)
 
     planner = _Planner(
         days, budget, years, min_break, max_consecutive_pto, committed, long_break_bonus,
