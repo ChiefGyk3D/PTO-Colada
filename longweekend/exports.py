@@ -281,13 +281,19 @@ def build_workbook(
 
 
 def check_target(path: str, flag: str) -> str:
-    """Return the absolute path if it is safe to write, else raise ``ExportError``."""
+    """Return the path to write, else raise ``ExportError``.
+
+    The directory part is resolved (so a symlinked directory is followed to its
+    real location); the final component must not be a symlink and, if it
+    exists, must be a regular file.
+    """
     if not path or "\x00" in path:
         raise ExportError(f"{flag}: not a usable file path")
-    target = os.path.abspath(os.path.expanduser(path))
-    parent = os.path.dirname(target)
+    absolute = os.path.abspath(os.path.expanduser(path))
+    parent = os.path.realpath(os.path.dirname(absolute))
     if not os.path.isdir(parent):
-        raise ExportError(f"{flag}: directory does not exist: {parent}")
+        raise ExportError(f"{flag}: directory does not exist: {os.path.dirname(absolute)}")
+    target = os.path.join(parent, os.path.basename(absolute))
     if os.path.islink(target):
         raise ExportError(f"{flag}: {path} is a symbolic link; refusing to write through it")
     try:
@@ -301,27 +307,43 @@ def check_target(path: str, flag: str) -> str:
     return target
 
 
+def _same_file(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    try:
+        return os.path.samefile(a, b)  # hard links and the like; False if either is missing
+    except OSError:
+        return False
+
+
 def _atomic_write(target: str, writer: Any, flag: str) -> None:
     """Run ``writer(tmp_path)`` then rename the result over ``target``.
 
     The temporary file is created exclusively in the destination directory
     (so the rename is atomic) and removed on any failure. ``os.replace``
     swaps the directory entry itself, so even a symlink planted after the
-    check is replaced rather than followed.
+    check is replaced rather than followed. An existing file keeps its
+    permissions; a new one gets the usual umask-filtered 0666.
     """
-    fd, tmp = tempfile.mkstemp(prefix=".lwp-export-", suffix=".tmp", dir=os.path.dirname(target))
+    tmp = None
     try:
+        fd, tmp = tempfile.mkstemp(
+            prefix=".lwp-export-", suffix=".tmp", dir=os.path.dirname(target)
+        )
         os.close(fd)
         writer(tmp)
-        # mkstemp makes the file private; exports follow the umask like any other.
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(tmp, 0o666 & ~umask)
+        try:
+            mode = stat.S_IMODE(os.lstat(target).st_mode)
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
         os.replace(tmp, target)
     except OSError as exc:
         raise ExportError(f"{flag}: could not write {target}: {exc.strerror or exc}") from None
     finally:
-        if os.path.exists(tmp):
+        if tmp is not None and os.path.exists(tmp):
             os.unlink(tmp)
 
 
@@ -355,8 +377,9 @@ def write_exports(
         if path is None:
             continue
         target = check_target(path, flag)
-        if target in seen:
-            raise ExportError(f"{flag} and {seen[target]} name the same file: {path}")
+        for other, other_flag in seen.items():
+            if _same_file(target, other):
+                raise ExportError(f"{flag} and {other_flag} name the same file: {path}")
         seen[target] = flag
         jobs.append((flag, target))
     targets = {flag: target for flag, target in jobs}

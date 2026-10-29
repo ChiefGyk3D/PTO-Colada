@@ -71,6 +71,43 @@ long-weekend --start-year 2030 --end-year 2032
 long-weekend --from-today             # skip days that have already passed
 ```
 
+## Planning from today, in hours
+
+People plan from where they are: "it's November, I have 36 hours left, the
+bank refills on January 1, and I want a break in March." Give the balance in
+hours and the tool plans the rest of the horizon, across the new year.
+
+```
+long-weekend --today 2026-11-02 --pto-hours 36 --refill-hours 120 \
+  --carryover 5 --through 2027-03-31 --commit 2027-03-15:2027-03-19
+```
+
+`--today` pins the date so the example is reproducible; leave it off to use the
+real date. The output states what it assumed, then reports rest next to the
+efficiency score.
+
+* **Hours to days.** `--hours-per-day` (default 8). Whole days are planned:
+  `floor(hours / hours per day)`. The leftover hours (36 h at 8 h/day is 4 days
+  and 4 hours) are reported, never planned. Half days are a follow-up.
+* **Horizon.** From today to `--through DATE`, or `--months N` (1 to 60); by
+  default to December 31 of this year. Days before today are never planned.
+* **Refill and carryover.** `--refill-hours` is granted every January 1 inside
+  the horizon. At each year end, unspent days roll over up to `--carryover`
+  (in days) and never more than that year's grant; the rest is reported as
+  `use-it-or-lose-it: N hours`. `--pto-year YEAR=DAYS` still overrides one year.
+  If `--today` is a January 1, that day's refill is not added: the balance you
+  give is the year's allowance. A window with no later January 1 never uses the
+  refill, and says so.
+* **Rest.** A *rest break* is 3 or more days off in a row (holidays and
+  weekends included). The report gives the longest stretch of working days
+  between breaks and the average gap between breaks. `--max-work-streak N`
+  forbids more than N working days between rest breaks (counted from the first
+  planned day); the search stays exact, and if no plan can honor it, you get an
+  error naming the cause. It belongs to the classic planner, not `--goal`.
+
+These options are command-line only, and omitting them leaves every other
+output unchanged.
+
 ## Which holidays your employer observes
 
 No two employers close for the same days, so nothing is baked in. Start from a
@@ -676,7 +713,9 @@ long-weekend --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
 - `--export-csv FILE`: one row per break and per PTO day with columns `kind`,
   `start`, `end`, `length_days`, `pto_cost`, `efficiency`, `description`. Needs
   `--pto`. Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
-  is prefixed with `'` so a spreadsheet cannot run it as a formula.
+  is prefixed with `'` so a spreadsheet cannot run it as a formula. In the
+  workbook, text is stored as string cells, so a value such as `=SUM(1)` is
+  shown as text rather than evaluated.
 - `--export-xlsx FILE`: a workbook with a Summary sheet (efficiency score, PTO
   booked, days in breaks, per-year budget), Breaks, PTO and PTO per month
   sheets, and native charts for the return curve, the breaks timeline and PTO
@@ -691,8 +730,12 @@ pip install -e ".[xlsx]"        # or: pip install 'long-weekend-planner[xlsx]'
 ```
 
 Files are written atomically (a temporary file in the same directory, then a
-rename), an existing regular file is replaced, and a symbolic link, directory
-or other non-regular path is refused.
+rename). An existing regular file is replaced and keeps its permissions. The
+directory part of a path may be a symlink and is resolved; the final component
+must not be a symbolic link, and a directory or other non-regular file is
+refused. Two flags that resolve to the same file (same real path, or a hard
+link to it) are refused. An unwritable directory is an error message, not a
+traceback.
 
 ## Using it as a library
 

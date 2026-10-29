@@ -320,3 +320,77 @@ class TestDefaultOutputUnchanged:
         ], capsys)
         assert exported.out == plain.out
         assert "wrote" in exported.err and plain.err == ""
+
+
+# ------------------------------------------------------------------------- round 2
+
+
+class TestRound2:
+    def test_unwritable_directory_is_a_clean_error(self, tmp_path, capsys):
+        if os.geteuid() == 0:
+            pytest.skip("root ignores directory permissions")
+        ro = tmp_path / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        try:
+            err = fails(ARGS + ["--export-csv", str(ro / "x.csv")], capsys)
+        finally:
+            ro.chmod(0o755)
+        assert "could not write" in err and "Traceback" not in err
+        assert list(ro.iterdir()) == []
+
+    def test_symlinked_directory_duplicate_refused(self, tmp_path, capsys):
+        (tmp_path / "real").mkdir()
+        (tmp_path / "alias").symlink_to(tmp_path / "real")
+        err = fails(ARGS + ["--export-csv", str(tmp_path / "real" / "f"),
+                            "--export-ics", str(tmp_path / "alias" / "f")], capsys)
+        assert "same file" in err
+
+    def test_hardlink_duplicate_refused(self, tmp_path, capsys):
+        first = tmp_path / "a"
+        first.write_text("x")
+        os.link(first, tmp_path / "b")
+        err = fails(ARGS + ["--export-csv", str(first), "--export-ics", str(tmp_path / "b")], capsys)
+        assert "same file" in err
+        assert first.read_text() == "x"
+
+    def test_empty_path_is_an_error_not_ignored(self, capsys):
+        assert "not a usable file path" in fails(ARGS + ["--export-csv", ""], capsys)
+
+    def test_nul_in_library_path_refused(self, tmp_path):
+        config = build_config(preset="federal", years=[2026])
+        with pytest.raises(ExportError, match="not a usable"):
+            write_exports(config, {}, None, ics=str(tmp_path / "a\x00b"))
+
+    def test_new_file_follows_umask(self, tmp_path, capsys):
+        old = os.umask(0o027)
+        try:
+            run(ARGS + ["--export-csv", str(tmp_path / "n.csv")], capsys)
+        finally:
+            os.umask(old)
+        assert (tmp_path / "n.csv").stat().st_mode & 0o777 == 0o640
+
+    def test_replace_keeps_existing_mode(self, tmp_path, capsys):
+        out = tmp_path / "e.csv"
+        out.write_text("old")
+        out.chmod(0o600)
+        run(ARGS + ["--export-csv", str(out)], capsys)
+        assert out.stat().st_mode & 0o777 == 0o600
+        assert out.read_text().startswith("kind,")
+
+    def test_horizon_mode_exports(self, tmp_path, capsys):
+        openpyxl = pytest.importorskip("openpyxl")
+        base = ["--today", "2026-11-02", "--pto-hours", "36", "--through", "2027-03-31"]
+        assert main(base + ["--format", "json"]) == 0
+        plan = json.loads(capsys.readouterr().out)["plan"]
+        out = {k: tmp_path / ("h." + k) for k in ("ics", "csv", "xlsx")}
+        code, cap = run(base + [f"--export-{k}={v}" for k, v in out.items()], capsys)
+        assert code == 0
+        rows = list(csv.reader(out["csv"].read_text().splitlines()))[1:]
+        assert [r[1] for r in rows if r[0] == "pto"] == plan["pto_dates"]
+        assert len([r for r in rows if r[0] == "break"]) == len(plan["breaks"])
+        assert out["ics"].read_text().count("CATEGORIES:PTO") == len(plan["pto_dates"])
+        wb = openpyxl.load_workbook(out["xlsx"])
+        assert wb["Breaks"].max_row - 1 == len(plan["breaks"])
+        _, plain = run(base, capsys)
+        assert cap.out == plain.out
