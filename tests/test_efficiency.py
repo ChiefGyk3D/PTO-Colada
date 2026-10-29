@@ -184,6 +184,49 @@ class TestSaturation:
         assert len({p.days_in_breaks for p in curve.points[working:]}) == 1
 
 
+    def test_uneven_grants_with_carryover_are_still_replanned(self):
+        """Regression: a short-granted year lives off days rolled from the year before.
+
+        Rollover needs unused days in the prior year, which only exist once the
+        cap exceeds that year's working days, so saturation is not yet reached.
+        """
+        days = make_days(dt.date(2026, 12, 14), dt.date(2027, 1, 29), PRESETS["federal"])
+        budget = PtoBudget(per_year={2026: 40, 2027: 2}, carryover=10)
+        curve = return_curve(days, budget, min_break=4)
+        years = [2026, 2027]
+        assert len(curve.points) == 41
+        for point in curve.points:
+            ref = optimize_pto(days, capped_budget(budget, point.budget, years), min_break=4)
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
+
+    def test_a_skipped_budget_still_gives_its_own_fresh_plan(self):
+        days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        curve = return_curve(days, PtoBudget(default=40), min_break=4)
+        fresh = optimize_pto(days, PtoBudget(default=35), min_break=4)
+        assert curve.plans[35].pto_dates == fresh.pto_dates
+
+    def test_the_skip_still_engages_for_even_grants_without_carryover(self, monkeypatch):
+        days = make_days(dt.date(2026, 12, 14), dt.date(2027, 1, 29), PRESETS["federal"])
+        calls = []
+        real = efficiency_module.optimize_pto
+        monkeypatch.setattr(
+            efficiency_module, "optimize_pto", lambda *a, **k: calls.append(1) or real(*a, **k)
+        )
+        curve = return_curve(days, PtoBudget(default=60), min_break=4)
+        assert len(curve.points) == 61
+        assert len(calls) < 40
+
+    def test_the_skip_engages_with_carryover_when_every_grant_covers_its_year(self, monkeypatch):
+        days = make_days(dt.date(2026, 12, 14), dt.date(2027, 1, 29), PRESETS["federal"])
+        calls = []
+        real = efficiency_module.optimize_pto
+        monkeypatch.setattr(
+            efficiency_module, "optimize_pto", lambda *a, **k: calls.append(1) or real(*a, **k)
+        )
+        return_curve(days, PtoBudget(default=60, carryover=5), min_break=4)
+        assert len(calls) < 40
+
+
 class TestMinReturn:
     def curve(self):
         return return_curve(days_for("federal"), PtoBudget(default=17), min_break=4)
@@ -220,6 +263,14 @@ class TestMinReturn:
         assert curve.points[1].marginal == 0.0  # the first day returns nothing
         stop = curve.stop_for_min_return(1)
         assert (stop.budget, stop.days_in_breaks) == (4, 9)
+
+    def test_extra_budget_that_buys_nothing_does_not_move_the_stop(self):
+        """Pins the hull's duplicate-spend branch: late budgets repeat the same plan."""
+        window = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        curve = return_curve(window, PtoBudget(default=40), min_break=4)
+        stop = curve.stop_for_min_return(0.5)
+        assert stop.budget == 22
+        assert stop.pto_spent == curve.points[-1].pto_spent == 22
 
     def test_zero_never_stops_early(self):
         assert self.curve().stop_for_min_return(0).budget == 17
@@ -351,8 +402,9 @@ class TestCli:
 
     def test_a_budget_that_always_pays_is_reported_as_fully_used(self, capsys):
         out = self.run(capsys, "--pto", "17", "--min-return", "1")
-        assert "used the full budget; every day returned at least 1 day in breaks" in out
+        assert "used the full budget; the extra days averaged at least 1 day in breaks each" in out
         assert "would return fewer" not in out
+        assert "every day returned" not in out
 
     def test_new_text_says_days_in_breaks_and_labels_the_old_figure(self, capsys):
         out = self.run(capsys, "--pto", "17", "--efficiency")

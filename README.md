@@ -326,7 +326,8 @@ lone zero-return day therefore no longer stops the plan, and a poor day
 followed by a good one is judged together. For the federal preset in 2027
 with `--min-break 4`: `--min-return 3.5` or `2.5` stops at 11 days (44 days
 in breaks), and `1.9` spends all 17 (56). When every stretch clears `X`, the
-output says it used the full budget. The stopping budget is one per-year cap
+output says it used the full budget and that the extra days averaged at least
+`X` (an individual day can still return less). The stopping budget is one per-year cap
 shared by every year in the window, never above a year's own grant; the output
 says "up to N PTO days per year" for that reason.
 

@@ -253,8 +253,8 @@ def _render_efficiency(plan: PtoPlan, objective: Optional[Dict[str, Any]]) -> Li
         if objective["kind"] == "min_return" and objective["full_budget"]:
             unit = "day" if value == 1 else "days"
             lines.append(
-                f"  Spending used the full budget; every day returned at least {value:g} "
-                f"{unit} in breaks."
+                f"  Spending used the full budget; the extra days averaged at least {value:g} "
+                f"{unit} in breaks each."
             )
         elif objective["kind"] == "min_return":
             lines.append(

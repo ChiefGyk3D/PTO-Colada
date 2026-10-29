@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .schedule import Day, DayKind
@@ -142,6 +142,18 @@ class ReturnCurve:
         ]
 
 
+class _LazyPlans(Dict[int, PtoPlan]):
+    """Plans by budget; one that was skipped is planned on first use."""
+
+    def __init__(self, plan_for: Callable[[int], PtoPlan]) -> None:
+        super().__init__()
+        self._plan_for = plan_for
+
+    def __missing__(self, cap: int) -> PtoPlan:
+        plan = self[cap] = self._plan_for(cap)
+        return plan
+
+
 def _turns_up(a: CurvePoint, b: CurvePoint, c: CurvePoint) -> bool:
     """True when ``b`` lies on or below the line from ``a`` to ``c``."""
     return (
@@ -183,30 +195,41 @@ def return_curve(
     )
 
     # No year can take more PTO than it has working days, so once the cap
-    # reaches that every larger budget plans identically; reuse the result
-    # rather than rerunning the dynamic program for each one.
-    usable = max(
-        (sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
-         for y in years),
-        default=0,
+    # reaches that every larger budget can plan identically; reuse the result
+    # rather than rerunning the dynamic program for each one. That holds only
+    # when a year's allowance does not depend on the cap beyond its own grant:
+    # with carryover, a year granted fewer days than it has working days lives
+    # off days rolled from the year before, and those exist only while the cap
+    # leaves that earlier year unused days. Then every budget is replanned.
+    workdays = {
+        y: sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
+        for y in years
+    }
+    skippable = budget.carryover == 0 or all(
+        budget.for_year(y) >= workdays[y] for y in years
     )
+    usable = max(workdays.values(), default=0) if skippable else ceiling + 1
+    def plan_for(cap: int) -> PtoPlan:
+        return optimize_pto(
+            days,
+            capped_budget(budget, cap, years),
+            min_break=min_break,
+            max_consecutive_pto=max_consecutive_pto,
+            committed=committed,
+            long_break_bonus=long_break_bonus,
+        )
+
     points: List[CurvePoint] = []
-    plans: Dict[int, PtoPlan] = {}
+    # Skipped budgets keep their numbers but not a stored plan: a fresh plan
+    # may pick different dates among equal ones, so it is made when asked for.
+    plans: Dict[int, PtoPlan] = _LazyPlans(plan_for)
     for cap in range(ceiling + 1):
         if points and points[-1].budget >= usable:
             last = points[-1]
             points.append(CurvePoint(cap, last.pto_spent, last.days_in_breaks, 0.0))
-            plans[cap] = plans[last.budget]
             continue
         try:
-            plan = optimize_pto(
-                days,
-                capped_budget(budget, cap, years),
-                min_break=min_break,
-                max_consecutive_pto=max_consecutive_pto,
-                committed=committed,
-                long_break_bonus=long_break_bonus,
-            )
+            plan = plan_for(cap)
         except ValueError:
             if cap == ceiling:
                 raise
