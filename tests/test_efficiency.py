@@ -126,6 +126,9 @@ class TestMinReturn:
     def test_a_demanding_threshold_stops_at_the_start(self):
         assert self.curve().stop_for_min_return(5).budget == 0
 
+    def test_a_day_that_returns_exactly_the_minimum_is_kept(self):
+        assert self.curve().stop_for_min_return(4).budget == 11
+
     def test_zero_never_stops_early(self):
         assert self.curve().stop_for_min_return(0).budget == 17
 
