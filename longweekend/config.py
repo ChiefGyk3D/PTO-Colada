@@ -291,6 +291,16 @@ def _yaml_loader(path: str):
             finally:
                 self._depth -= 1
 
+        def construct_object(self, node, deep=False):  # type: ignore[no-untyped-def]
+            try:
+                return super().construct_object(node, deep)
+            except (ValueError, yaml.YAMLError, RecursionError, MemoryError):
+                raise
+            except Exception:
+                # Any other failure inside a constructor (a bad !!bool raises
+                # KeyError, for one) is a bad value in the file, not a crash.
+                raise ValueError(_bad_value(path, node)) from None
+
         def construct_mapping(self, node, deep=False):  # type: ignore[no-untyped-def]
             seen = set()
             for key_node, _ in node.value:
@@ -355,6 +365,16 @@ def _yaml_loader(path: str):
     return StrictLoader
 
 
+def _bad_value(path: str, node: object) -> str:
+    """Name the tag and position of a value that could not be read, never its text."""
+    tag = str(getattr(node, "tag", ""))
+    if tag.startswith("tag:yaml.org,2002:"):
+        tag = "!!" + tag[len("tag:yaml.org,2002:"):]
+    mark = getattr(node, "start_mark", None)
+    where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+    return f"{path} is invalid YAML{where}: could not read a {tag or 'value'} value"
+
+
 def _yaml_problem(exc: Exception) -> str:
     """Describe a YAML error by position and problem only; the source line is left out."""
     mark = getattr(exc, "problem_mark", None)
@@ -416,6 +436,10 @@ def load_config_file(path: str) -> Dict[str, object]:
                 data = loader.construct_document(node) if node is not None else None
             except yaml.YAMLError as exc:
                 raise ValueError(f"{path} is {_yaml_problem(exc)}") from None
+            except (ValueError, RecursionError, MemoryError):
+                raise
+            except Exception:
+                raise ValueError(f"{path} is invalid YAML: a value could not be read") from None
             finally:
                 loader.dispose()
         else:
@@ -423,6 +447,10 @@ def load_config_file(path: str) -> Dict[str, object]:
                 data = json.loads(text, **_json_hooks(path))
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path} is not valid JSON: {exc}") from None
+            except (ValueError, RecursionError, MemoryError):
+                raise
+            except Exception:
+                raise ValueError(f"{path} is not valid JSON: a value could not be read") from None
     except RecursionError:
         raise ValueError(f"{path} is nested too deeply to read") from None
 

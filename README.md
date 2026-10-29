@@ -212,6 +212,8 @@ of nesting. They must be regular files. Duplicate keys, YAML aliases (`&x`,
 different spellings (`"2027"` and `2027`). Numbers are written in plain decimal
 (`17`, not `010`, `0x11` or `1:20`); text, fractions, infinity and huge values
 are rejected with a message naming the key.
+Config errors may quote the value you wrote and the file's path; do not paste
+them into public places if the file holds private data.
 
 ```
 long-weekend --config examples/acme.json --pto 20
