@@ -206,6 +206,13 @@ For anything you would otherwise retype, use a JSON or YAML config. See
 Use `holidays` instead of `preset` to define the whole set from scratch.
 Command-line flags override whatever the file says.
 
+Config files are small by design: at most 64 KiB, 10,000 values and 16 levels
+of nesting. They must be regular files. Duplicate keys, YAML aliases (`&x`,
+`*x`) and merge keys (`<<`) are errors, as are year keys that repeat in
+different spellings (`"2027"` and `2027`). Numbers are written in plain decimal
+(`17`, not `010`, `0x11` or `1:20`); text, fractions, infinity and huge values
+are rejected with a message naming the key.
+
 ```
 long-weekend --config examples/acme.json --pto 20
 ```
