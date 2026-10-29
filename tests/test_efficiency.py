@@ -7,12 +7,20 @@ import json
 
 import pytest
 
-from longweekend.catalog import PRESETS, resolve_year
+from longweekend.catalog import PRESETS, FixedDate, resolve_year
 from longweekend.cli import main
 from longweekend.config import build_config
-from longweekend.efficiency import return_curve
+import longweekend.efficiency as efficiency_module
+from longweekend.efficiency import capped_budget, return_curve
 from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import build_days
+from longweekend.schedule import DayKind, build_days
+
+
+def make_days(start, end, rules):
+    holidays = []
+    for year in range(start.year - 1, end.year + 2):
+        holidays.extend(resolve_year(list(rules), year))
+    return build_days(start, end, holidays)
 
 
 def days_for(preset, start_year=2027, years=1):
@@ -115,6 +123,67 @@ class TestReturnCurve:
         assert curve.knee is None
 
 
+class TestCapping:
+    def test_each_year_spends_at_most_its_cap(self):
+        """Pins capped_budget: a cap below a year's grant must bind that year."""
+        budget = PtoBudget(per_year={2026: 20, 2027: 5})
+        curve = return_curve(days_for("federal", 2026, 2), budget, min_break=4)
+        assert curve.points[-1].budget == 20
+        for point in curve.points:
+            spent = curve.plans[point.budget].spent_by_year
+            for year, grant in ((2026, 20), (2027, 5)):
+                assert spent.get(year, 0) <= min(grant, point.budget)
+        # The cap really bites: a year with a big grant is held to the cap.
+        assert curve.plans[8].spent_by_year[2026] == 8
+
+    def test_capped_budget_keeps_floating_and_carryover(self):
+        capped = capped_budget(
+            PtoBudget(per_year={2026: 9}, default=9, carryover=3, floating=2), 4, [2026, 2027]
+        )
+        assert capped.for_year(2026) == capped.for_year(2027) == 4
+        assert (capped.carryover, capped.floating_for_year(2026)) == (3, 2)
+
+    def test_carryover_curve_matches_the_planner_budget_by_budget(self):
+        days = days_for("federal", 2026, 2)
+        curve = return_curve(days, PtoBudget(default=10, carryover=5), min_break=4)
+        for point in curve.points:
+            ref = optimize_pto(days, PtoBudget(default=point.budget, carryover=5), min_break=4)
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
+
+    def test_floating_holidays_are_spent_first_and_counted(self):
+        days = days_for("federal")
+        curve = return_curve(days, PtoBudget(default=8, floating=2), min_break=4)
+        assert curve.points[0].pto_spent == 2  # budget 0 still has the floating days
+        for point in curve.points:
+            ref = optimize_pto(days, PtoBudget(default=point.budget, floating=2), min_break=4)
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
+
+
+class TestSaturation:
+    """Budgets beyond the working days in a year cannot change anything."""
+
+    def test_curve_matches_replanning_every_budget(self):
+        days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        curve = return_curve(days, PtoBudget(default=40), min_break=4)
+        assert len(curve.points) == 41
+        for point in curve.points:
+            ref = optimize_pto(days, PtoBudget(default=point.budget), min_break=4)
+            assert (point.days_in_breaks, point.pto_spent) == (ref.days_in_breaks, ref.total_pto)
+
+    def test_budgets_past_the_working_days_are_not_replanned(self, monkeypatch):
+        days = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 31), [FixedDate("Midweek", 7, 8)])
+        working = sum(1 for d in days if d.kind is DayKind.WORK)
+        calls = []
+        real = efficiency_module.optimize_pto
+        monkeypatch.setattr(
+            efficiency_module, "optimize_pto", lambda *a, **k: calls.append(1) or real(*a, **k)
+        )
+        curve = return_curve(days, PtoBudget(default=400), min_break=4)
+        assert len(curve.points) == 401
+        assert len(calls) <= working + 1
+        assert len({p.days_in_breaks for p in curve.points[working:]}) == 1
+
+
 class TestMinReturn:
     def curve(self):
         return return_curve(days_for("federal"), PtoBudget(default=17), min_break=4)
@@ -128,6 +197,29 @@ class TestMinReturn:
 
     def test_a_day_that_returns_exactly_the_minimum_is_kept(self):
         assert self.curve().stop_for_min_return(4).budget == 11
+
+    @pytest.mark.parametrize(
+        "min_break,minimum,budget,days",
+        [
+            (4, 1.9, 17, 56),
+            (4, 2.5, 11, 44),
+            (4, 3.5, 11, 44),
+            (5, 1.0, 17, 41),
+            (7, 1.0, 17, 37),
+        ],
+    )
+    def test_follows_the_upper_hull_of_the_curve(self, min_break, minimum, budget, days):
+        curve = return_curve(days_for("federal"), PtoBudget(default=17), min_break=min_break)
+        stop = curve.stop_for_min_return(minimum)
+        assert (stop.budget, stop.days_in_breaks) == (budget, days)
+
+    def test_a_lone_zero_return_day_does_not_stop_the_plan(self):
+        """Regression: one PTO day that buys nothing used to end the search at 0."""
+        window = make_days(dt.date(2026, 7, 1), dt.date(2026, 7, 24), [FixedDate("Midweek", 7, 8)])
+        curve = return_curve(window, PtoBudget(default=4), min_break=5)
+        assert curve.points[1].marginal == 0.0  # the first day returns nothing
+        stop = curve.stop_for_min_return(1)
+        assert (stop.budget, stop.days_in_breaks) == (4, 9)
 
     def test_zero_never_stops_early(self):
         assert self.curve().stop_for_min_return(0).budget == 17
@@ -169,6 +261,33 @@ class TestConfigValidation:
         path.write_text(json.dumps({"min_return": -1}), encoding="utf-8")
         with pytest.raises(ValueError, match="min_return"):
             build_config(config_path=str(path))
+
+    @pytest.mark.parametrize(
+        "key,value",
+        [
+            ("target_days_off", None),
+            ("target_days_off", True),
+            ("target_days_off", 30.5),
+            ("target_days_off", float("inf")),
+            ("target_days_off", "forty"),
+            ("min_return", None),
+            ("min_return", False),
+            ("min_return", "lots"),
+        ],
+    )
+    def test_malformed_file_values_are_clean_errors(self, tmp_path, key, value):
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps({key: value}), encoding="utf-8")
+        with pytest.raises(ValueError, match=key):
+            build_config(config_path=str(path))
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--config", str(path), "--pto", "10", "--years", "1"])
+        assert excinfo.value.code == 2
+
+    def test_whole_number_floats_from_a_file_are_accepted(self, tmp_path):
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps({"target_days_off": 40.0, "pto_days": 10}), encoding="utf-8")
+        assert build_config(config_path=str(path)).target_days_off == 40
 
     def test_valid_values_are_kept(self):
         config = build_config(pto=10, min_return=2.5)
@@ -227,8 +346,25 @@ class TestCli:
         out = self.run(capsys, "--pto", "17", "--min-return", "2.5")
         assert "11 PTO day(s) spent for" in out
         assert "Return curve" not in out  # computed to decide, shown only on request
-        assert "stopped at 11 PTO day(s) per year" in out
+        assert "stopped at up to 11 PTO day(s) per year" in out
         assert "44 days in breaks for 11 PTO day(s)" in out
+
+    def test_a_budget_that_always_pays_is_reported_as_fully_used(self, capsys):
+        out = self.run(capsys, "--pto", "17", "--min-return", "1")
+        assert "used the full budget; every day returned at least 1 day in breaks" in out
+        assert "would return fewer" not in out
+
+    def test_new_text_says_days_in_breaks_and_labels_the_old_figure(self, capsys):
+        out = self.run(capsys, "--pto", "17", "--efficiency")
+        assert "days per PTO day, days in breaks only" in out
+        assert "days off per PTO day spent (every day off, weekends included)" in out
+        plain = self.run(capsys, "--pto", "17")
+        assert "days off per PTO day spent\n" in plain  # default output is untouched
+
+    def test_the_target_flag_has_an_in_breaks_alias(self, capsys):
+        out = self.run(capsys, "--pto", "17", "--target-days-in-breaks", "40")
+        assert "40 days in breaks for 10 PTO day(s)" in out
+        assert "reached with up to 10 PTO day(s) per year" in out
 
     def test_target_days_off(self, capsys):
         out = self.run(capsys, "--pto", "17", "--target-days-off", "40")
@@ -269,5 +405,5 @@ class TestCli:
 
     def test_a_curve_beside_a_stop_condition_covers_the_whole_budget(self, capsys):
         out = self.run(capsys, "--pto", "17", "--min-return", "2.5", "--curve")
-        assert "stopped at 11" in out
+        assert "stopped at up to 11" in out
         assert len([ln for ln in out.splitlines() if ln.strip().endswith("<- knee")]) == 1

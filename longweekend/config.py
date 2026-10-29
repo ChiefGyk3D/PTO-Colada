@@ -420,15 +420,25 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
     if "max_consecutive_pto" in data:
         config.max_consecutive_pto = int(data["max_consecutive_pto"])  # type: ignore[arg-type]
     if "min_return" in data:
-        config.min_return = float(data["min_return"])  # type: ignore[arg-type]
+        config.min_return = _file_number(data["min_return"], "min_return", path)
     if "target_days_off" in data:
-        config.target_days_off = int(data["target_days_off"])  # type: ignore[arg-type]
+        number = _file_number(data["target_days_off"], "target_days_off", path)
+        if not math.isfinite(number) or number != int(number):
+            raise ValueError(f"{path}: 'target_days_off' must be a whole number (got {number})")
+        config.target_days_off = int(number)
     if "conference_travel" in data:
         config.conference_travel = int(data["conference_travel"])  # type: ignore[arg-type]
     if "blackout" in data:
         config.blackout |= parse_date_ranges(str(v) for v in _as_list(data["blackout"]))
     if "committed" in data:
         config.committed |= parse_date_ranges(str(v) for v in _as_list(data["committed"]))
+
+
+def _file_number(value: object, key: str, path: str) -> float:
+    """A number from a config file; null, booleans and text are errors, not zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path}: {key!r} must be a number (got {value!r})")
+    return float(value)
 
 
 def _as_list(value: object) -> List[object]:

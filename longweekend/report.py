@@ -70,7 +70,7 @@ def render_text(
             lines.extend(_render_plan_year(plan, year, config, efficiency))
 
     if plan is not None:
-        lines.extend(_render_totals(plan))
+        lines.extend(_render_totals(plan, labeled=efficiency))
         if efficiency:
             lines.extend(_render_efficiency(plan, objective))
         if curve is not None:
@@ -216,7 +216,7 @@ def _render_plan_year(
     return lines
 
 
-def _render_totals(plan: PtoPlan) -> List[str]:
+def _render_totals(plan: PtoPlan, labeled: bool = False) -> List[str]:
     days_off = plan.total_days_off
     bridged = sum(b.length for b in plan.breaks)
     lines = ["Totals", _RULE]
@@ -230,7 +230,9 @@ def _render_totals(plan: PtoPlan) -> List[str]:
         lines.append(f"  {plan.total_pto} PTO day(s) spent for {days_off} total days off")
     if plan.total_pto:
         unit = "day of leave" if plan.total_floating else "PTO day"
-        lines.append(f"  {days_off / plan.total_pto:.1f} days off per {unit} spent")
+        # Beside the days-in-breaks score, say which days this older figure counts.
+        scope = " (every day off, weekends included)" if labeled else ""
+        lines.append(f"  {days_off / plan.total_pto:.1f} days off per {unit} spent{scope}")
     return lines
 
 
@@ -240,21 +242,28 @@ def _render_efficiency(plan: PtoPlan, objective: Optional[Dict[str, Any]]) -> Li
     if plan.total_pto:
         lines.append(
             f"  Efficiency: {plan.days_in_breaks} days in breaks for {plan.total_pto} PTO "
-            f"day(s): {plan.efficiency:.1f} days per PTO day"
+            f"day(s): {plan.efficiency:.1f} days per PTO day, days in breaks only"
         )
     else:
         lines.append(
             f"  Efficiency: {plan.days_in_breaks} days in breaks without booking any leave"
         )
     if objective is not None:
-        if objective["kind"] == "min_return":
+        value = objective["value"]
+        if objective["kind"] == "min_return" and objective["full_budget"]:
+            unit = "day" if value == 1 else "days"
             lines.append(
-                f"  Spending stopped at {objective['budget_per_year']} PTO day(s) per year: "
-                f"the next day would return fewer than {objective['value']:g} days in breaks."
+                f"  Spending used the full budget; every day returned at least {value:g} "
+                f"{unit} in breaks."
+            )
+        elif objective["kind"] == "min_return":
+            lines.append(
+                f"  Spending stopped at up to {objective['budget_per_year']} PTO day(s) per "
+                f"year: past that, extra days would average fewer than {value:g} days in breaks."
             )
         else:
             lines.append(
-                f"  Target of {objective['value']} days in breaks reached with "
+                f"  Target of {value} days in breaks reached with up to "
                 f"{objective['budget_per_year']} PTO day(s) per year."
             )
     return lines
@@ -395,11 +404,14 @@ def render_json(
                 "days_per_pto": round(plan.efficiency, 3) if plan.efficiency else None,
             }
         if objective is not None:
-            extras["objective"] = {
+            stop: Dict[str, object] = {
                 ("min_return" if objective["kind"] == "min_return" else "target_days_off"):
                     objective["value"],
                 "budget_per_year": objective["budget_per_year"],
             }
+            if objective["kind"] == "min_return":
+                stop["full_budget"] = objective["full_budget"]
+            extras["objective"] = stop
     if curve is not None:
         knee = curve.knee
         payload["curve"] = {

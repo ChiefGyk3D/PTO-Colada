@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 from .planner import PtoBudget, PtoPlan, optimize_pto
-from .schedule import Day
+from .schedule import Day, DayKind
 
 __all__ = ["CurvePoint", "ReturnCurve", "capped_budget", "return_curve"]
 
@@ -74,18 +74,45 @@ class ReturnCurve:
                 return self.points[index - 1]
         return None
 
-    def stop_for_min_return(self, minimum: float) -> CurvePoint:
-        """The smallest budget whose next extra budget day returns under ``minimum``.
+    def _hull(self) -> List[CurvePoint]:
+        """The upper concave hull of days in breaks against PTO spent.
 
-        Spending stops at the first step that earns too little, even if a later
-        step would earn more again; the last point is returned when every step
-        clears the bar.
+        The curve is not smooth: one day can return nothing while the next two
+        return a whole new break, and a long tail alternates between poor and
+        good days. The hull is the best that any mix of budgets can average,
+        so its slopes only fall, and comparing them with a threshold is
+        meaningful where comparing neighbouring steps is not.
         """
-        for index in range(len(self.points) - 1):
-            following = self.points[index + 1].marginal
-            if following is not None and following < minimum:
-                return self.points[index]
-        return self.points[-1]
+        hull: List[CurvePoint] = []
+        for point in self.points:
+            if hull and point.pto_spent == hull[-1].pto_spent:
+                if point.days_in_breaks <= hull[-1].days_in_breaks:
+                    continue  # extra budget that bought nothing
+                hull.pop()
+            while len(hull) >= 2 and _turns_up(hull[-2], hull[-1], point):
+                hull.pop()
+            hull.append(point)
+        return hull
+
+    def stop_for_min_return(self, minimum: float) -> CurvePoint:
+        """Where to stop so that spending keeps averaging ``minimum`` days per PTO day.
+
+        Walk the upper hull of the curve and stop at the last vertex reached by
+        a slope of at least ``minimum``. Looking across a stretch of budgets,
+        rather than at one day, means a day that returns nothing on its own
+        (the first of two days that bridge a midweek holiday) does not end the
+        search, and neither does a poor day followed by a good one. The last
+        point is returned when every stretch clears the bar.
+        """
+        hull = self._hull()
+        chosen = hull[0]
+        for start, end in zip(hull, hull[1:]):
+            gained = end.days_in_breaks - start.days_in_breaks
+            booked = end.pto_spent - start.pto_spent
+            if gained < minimum * booked - _EPSILON:
+                break
+            chosen = end
+        return chosen
 
     def cheapest_for_target(self, target: int) -> CurvePoint:
         """The smallest budget reaching ``target`` days in breaks."""
@@ -113,6 +140,14 @@ class ReturnCurve:
             }
             for p in self.points
         ]
+
+
+def _turns_up(a: CurvePoint, b: CurvePoint, c: CurvePoint) -> bool:
+    """True when ``b`` lies on or below the line from ``a`` to ``c``."""
+    return (
+        (b.days_in_breaks - a.days_in_breaks) * (c.pto_spent - b.pto_spent)
+        <= (c.days_in_breaks - b.days_in_breaks) * (b.pto_spent - a.pto_spent)
+    )
 
 
 def capped_budget(budget: PtoBudget, cap: int, years: Sequence[int]) -> PtoBudget:
@@ -147,9 +182,22 @@ def return_curve(
         (budget.for_year(year) for year in years), default=budget.default
     )
 
+    # No year can take more PTO than it has working days, so once the cap
+    # reaches that every larger budget plans identically; reuse the result
+    # rather than rerunning the dynamic program for each one.
+    usable = max(
+        (sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
+         for y in years),
+        default=0,
+    )
     points: List[CurvePoint] = []
     plans: Dict[int, PtoPlan] = {}
     for cap in range(ceiling + 1):
+        if points and points[-1].budget >= usable:
+            last = points[-1]
+            points.append(CurvePoint(cap, last.pto_spent, last.days_in_breaks, 0.0))
+            plans[cap] = plans[last.budget]
+            continue
         try:
             plan = optimize_pto(
                 days,

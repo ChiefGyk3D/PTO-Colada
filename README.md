@@ -280,8 +280,10 @@ long-weekend --pto 17 --target-days-off 40    # the fewest PTO days that reach 4
 least `--min-break` consecutive days off. Plain weekends and stray holidays do
 not count. The **efficiency** is days in breaks per PTO day spent, overall and
 for each break. (The older "days off per PTO day spent" line in the totals
-counts every day off in the window, so it is a larger number; the two are
-labeled differently on purpose.) `--efficiency` adds the score to the text
+counts every day off in the window, weekends included, so it is a larger
+number. Whenever the new score is printed beside it, that older line is
+labeled "every day off, weekends included" and the new one "days in breaks
+only", so the two cannot be confused.) `--efficiency` adds the score to the text
 output, to the JSON (`plan.efficiency`) and to the description of each break
 event in the `.ics` file. Without any of these options the output is exactly what
 it was before.
@@ -312,18 +314,33 @@ With `--format json` the same rows appear under `curve.points`; in Python, call
 `longweekend.efficiency.return_curve(days, budget, min_break=4)` and use
 `curve.as_dicts()`, `curve.knee` and `curve.points`.
 
-**`--min-return X`** takes the smallest budget whose *next* extra day returns
-fewer than `X` days in breaks, so `--min-return 2.5` stops at 11 days and plans
-44 days in breaks. It is applied per year: the stopping budget is one
-per-year cap shared by every year in the window, never above that year's own
-grant. A step that returns little ends the search even if a later step would
-earn more, so a very high `X` can stop at 0.
+**`--min-return X`** stops spending once extra days would return fewer than
+`X` days in breaks each, on average. It does not judge one day at a time,
+because the curve is lumpy: the first of two days that bridge a midweek holiday
+can return nothing, and the federal tail alternates between 1 and 3. Instead it
+takes the *upper hull* of the curve, the best average any mix of budgets can
+reach (picture a string pulled tight over the top of the points). Moving
+along the hull, each stretch has a return per PTO day, and those only fall. The
+plan stops at the last point reached by a stretch returning at least `X`. A
+lone zero-return day therefore no longer stops the plan, and a poor day
+followed by a good one is judged together. For the federal preset in 2027
+with `--min-break 4`: `--min-return 3.5` or `2.5` stops at 11 days (44 days
+in breaks), and `1.9` spends all 17 (56). When every stretch clears `X`, the
+output says it used the full budget. The stopping budget is one per-year cap
+shared by every year in the window, never above a year's own grant; the output
+says "up to N PTO days per year" for that reason.
 
-**`--target-days-off N`** takes the smallest per-year budget that reaches `N`
-days in breaks: `--target-days-off 40` plans 10 PTO days. If `--pto` cannot
-reach `N`, it exits with an error that names the most it can reach (here, 56).
-With several years the cap is shared, so the total is the fewest for that
-shape, not a global minimum across uneven years.
+**`--target-days-off N`** (also spelled `--target-days-in-breaks`) takes the
+smallest per-year budget that reaches `N` days in breaks: `--target-days-off 40`
+plans 10 PTO days. If `--pto` cannot reach `N`, it exits with an error that
+names the most it can reach (here, 56). With several years the cap is shared,
+so the total is the fewest for that shape, not a global minimum across uneven
+years.
+
+Each budget is a full exact plan, so `--curve` and the stop options take longer
+as `--pto` grows. Budgets past the working days in a year are not replanned
+(they cannot change anything), but a ceiling in the hundreds across several
+years still takes about a minute.
 
 `--min-return` and `--target-days-off` are alternatives; both also accept
 `min_return` and `target_days_off` in a config file.

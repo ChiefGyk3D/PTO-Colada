@@ -177,10 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     efficiency.add_argument(
-        "--target-days-off", type=int, metavar="N",
+        "--target-days-off", "--target-days-in-breaks", dest="target_days_off",
+        type=int, metavar="N",
         help=(
-            "spend the fewest PTO days that put N days into breaks; an error "
-            "names the most --pto can reach if N is out of range"
+            "spend the fewest PTO days that put N days into breaks (days in "
+            "breaks, not every day off); an error names the most --pto can "
+            "reach if N is out of range"
         ),
     )
 
@@ -426,6 +428,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if curve is not None and config.min_return is not None:
                 chosen = curve.stop_for_min_return(config.min_return)
                 objective = {"kind": "min_return", "value": config.min_return}
+                last = curve.points[-1]
+                objective["full_budget"] = (chosen.pto_spent, chosen.days_in_breaks) == (
+                    last.pto_spent, last.days_in_breaks
+                )
             elif curve is not None and config.target_days_off is not None:
                 chosen = curve.cheapest_for_target(config.target_days_off)
                 objective = {"kind": "target_days_off", "value": config.target_days_off}
