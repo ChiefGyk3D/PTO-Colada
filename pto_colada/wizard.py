@@ -117,7 +117,7 @@ def run_wizard(
     say("")
     say("Next time, skip the questions:")
     say("")
-    say("    long-weekend " + " ".join(_quote(a) for a in argv))
+    say("    pto-colada " + " ".join(_quote(a) for a in argv))
     say("")
     return argv
 

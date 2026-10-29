@@ -10,10 +10,10 @@ invocations keep working:
 Everything the old script did is still available, and the full feature set --
 company presets, custom holiday sets, PTO planning, JSON and calendar export --
 is reachable through the same command line. Run ``python3 holiday.py --help``
-or install the package and use the ``long-weekend`` command.
+or install the package and use the ``pto-colada`` command (``long-weekend`` still works).
 """
 
-from longweekend.cli import main
+from pto_colada.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

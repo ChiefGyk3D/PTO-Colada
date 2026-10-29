@@ -8,13 +8,13 @@ import pickle
 
 import pytest
 
-from longweekend.catalog import PRESETS, FixedDate, resolve_year
-from longweekend.cli import main
-from longweekend.config import build_config
-import longweekend.efficiency as efficiency_module
-from longweekend.efficiency import capped_budget, return_curve
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import DayKind, build_days
+from pto_colada.catalog import PRESETS, FixedDate, resolve_year
+from pto_colada.cli import main
+from pto_colada.config import build_config
+import pto_colada.efficiency as efficiency_module
+from pto_colada.efficiency import capped_budget, return_curve
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import DayKind, build_days
 
 
 def make_days(start, end, rules):

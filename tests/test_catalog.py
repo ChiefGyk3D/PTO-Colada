@@ -6,7 +6,7 @@ import datetime as dt
 
 import pytest
 
-from longweekend.catalog import (
+from pto_colada.catalog import (
     PRESETS,
     ExplicitDate,
     FixedDate,

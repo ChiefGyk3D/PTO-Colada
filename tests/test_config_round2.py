@@ -8,8 +8,8 @@ import tracemalloc
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import (
+from pto_colada.cli import main
+from pto_colada.config import (
     MAX_CONFIG_BYTES,
     MAX_CONFIG_DEPTH,
     MAX_CONFIG_NODES,
@@ -173,7 +173,7 @@ class TestNumbers:
         assert "pto_days" in cli_error(capsys, path)
 
     def test_cli_also_catches_overflow(self, monkeypatch, capsys):
-        import longweekend.cli as cli_module
+        import pto_colada.cli as cli_module
 
         def boom(**_kwargs):
             raise OverflowError("cannot convert float infinity to integer")

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import MAX_CONFIG_BYTES, MAX_CONFIG_NODES, build_config
+from pto_colada.cli import main
+from pto_colada.config import MAX_CONFIG_BYTES, MAX_CONFIG_NODES, build_config
 
 yaml = pytest.importorskip("yaml")
 
@@ -83,7 +83,7 @@ class TestOtherExplicitTags:
         ('!!str 7', "name", "7"), ("!!null ''", "name", None), ("!!bool true", "name", True),
     ])
     def test_harmless_tags_load_as_data(self, tmp_path, raw, field, expected):
-        from longweekend.config import load_config_file
+        from pto_colada.config import load_config_file
         data = load_config_file(write(tmp_path, "name: %s\n" % raw))
         assert data["name"] == expected
 

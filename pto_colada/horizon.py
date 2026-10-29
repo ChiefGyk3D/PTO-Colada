@@ -4,7 +4,7 @@ The classic planner works on whole calendar years and whole-day budgets. This
 module is the layer for "it's November, I have 36 hours left, I want a break
 in March, and the bank refills on January 1": it converts hours to the days the
 planner spends, builds the per-year budget, and reports what the plan leaves
-behind. The search itself is :func:`longweekend.planner.optimize_pto`.
+behind. The search itself is :func:`pto_colada.planner.optimize_pto`.
 
 Rules
 -----

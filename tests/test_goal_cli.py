@@ -8,8 +8,8 @@ import os
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import build_config
+from pto_colada.cli import main
+from pto_colada.config import build_config
 
 D = dt.date
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "examples", "employer-2027.json")

@@ -10,9 +10,9 @@ import shlex
 
 import pytest
 
-from longweekend.catalog import ResolvedHoliday
-from longweekend.cli import main
-from longweekend.report import provisional_assumptions
+from pto_colada.catalog import ResolvedHoliday
+from pto_colada.cli import main
+from pto_colada.report import provisional_assumptions
 
 D = dt.date
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -128,7 +128,7 @@ def test_carryover_is_shown_not_flagged_as_over_budget(capsys):
 
 
 def test_a_real_overspend_is_still_flagged():
-    from longweekend.honest import score_pto
+    from pto_colada.honest import score_pto
     r = score_pto({D(2027, 1, 4), D(2027, 2, 5)}, {}, years=[2027], budgets={2027: 1})
     assert r.budget_rows[0].over == 1
     r = score_pto({D(2027, 1, 4), D(2027, 2, 5)}, {}, years=[2027], budgets={2027: 1},
@@ -182,7 +182,7 @@ def test_goal_must_be_text(tmp_path, capsys):
 
 
 def test_whole_valued_integers_still_work(tmp_path):
-    from longweekend.config import build_config
+    from pto_colada.config import build_config
     path = write(tmp_path, {"pto_days": 3, "max_breaks": 2, "min_vacation_days": 6,
                             "holidays": [{"name": "X", "date": "2027-03-03"}]})
     config = build_config(config_path=path)
@@ -199,7 +199,7 @@ def _readme_commands():
     commands = []
     for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.S):
         for line in block.splitlines():
-            if line.startswith("long-weekend") and "employer-2027" in line:
+            if line.startswith("pto-colada") and "employer-2027" in line:
                 commands.append(line.split("#", 1)[0].strip())
     return text, commands
 
@@ -300,7 +300,7 @@ def test_goal_mode_ics_with_hostile_names(tmp_path, capsys, evil):
 
 
 def test_normal_names_are_escaped_as_before():
-    from longweekend.report import _escape
+    from pto_colada.report import _escape
     assert _escape("A, B; C\\D\nE") == "A\\, B\\; C\\\\D\\nE"
     assert _escape("Plain Name (observed)") == "Plain Name (observed)"
 

@@ -8,7 +8,7 @@ returned by the AlAdhan prayer-times API, endpoint
 (UAQ) calendar of Saudi Arabia; the ``HJCoSA`` method name the API reports
 returns the same values. Fetched
 2026-10-29, one request per holiday, 42 values. VERIFIED: the Hijri day of
-each holiday is the convention in :mod:`longweekend.islamic`; the Gregorian
+each holiday is the convention in :mod:`pto_colada.islamic`; the Gregorian
 date is the API's answer.
 
 Cross-checks from Wikipedia, "Eid al-Fitr" (https://en.wikipedia.org/wiki/Eid_al-Fitr),
@@ -30,10 +30,10 @@ import json
 
 import pytest
 
-from longweekend import islamic
-from longweekend.cli import main
-from longweekend.config import build_config
-from longweekend.observances import OBSERVANCE_SETS, resolve_observances
+from pto_colada import islamic
+from pto_colada.cli import main
+from pto_colada.config import build_config
+from pto_colada.observances import OBSERVANCE_SETS, resolve_observances
 
 UMM_AL_QURA = [
     ("Isra and Mi'raj", dt.date(2026, 1, 16)),

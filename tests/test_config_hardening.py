@@ -8,9 +8,9 @@ import threading
 
 import pytest
 
-from longweekend import config as config_module
-from longweekend.cli import main
-from longweekend.config import MAX_CONFIG_BYTES, MAX_CONFIG_DEPTH, build_config, load_config_file
+from pto_colada import config as config_module
+from pto_colada.cli import main
+from pto_colada.config import MAX_CONFIG_BYTES, MAX_CONFIG_DEPTH, build_config, load_config_file
 
 yaml = pytest.importorskip("yaml")
 

@@ -844,7 +844,7 @@ def render_ics(
     lines: List[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Long Weekend Planner//EN",
+        "PRODID:-//PTO Colada//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_escape(config.name)} time off" + (" (PROVISIONAL)" if assumptions or personal else ""),
@@ -947,6 +947,8 @@ def _event(
     uid = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:40]
     return [
         "BEGIN:VEVENT",
+        # The domain is a frozen identifier, not the product name: clients match
+        # events by UID, so changing it would duplicate every imported event.
         f"UID:{uid}@long-weekend-planner",
         f"DTSTAMP:{stamp}",
         f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}",

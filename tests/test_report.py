@@ -8,11 +8,11 @@ import re
 
 import pytest
 
-from longweekend.catalog import PRESETS, resolve_year
-from longweekend.config import build_config
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.report import _event, _fold, render_ics, render_json, render_text
-from longweekend.schedule import build_days, find_opportunities
+from pto_colada.catalog import PRESETS, resolve_year
+from pto_colada.config import build_config
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.report import _event, _fold, render_ics, render_json, render_text
+from pto_colada.schedule import build_days, find_opportunities
 
 
 @pytest.fixture
@@ -138,3 +138,19 @@ def test_event_uid_stable_distinct_and_shaped():
         _uid(a, b, "Other", "holiday"),
     }
     assert base not in others and len(others) == 3
+
+
+def test_event_uid_pinned_across_the_pto_colada_rename():
+    # UIDs changed once in #8 and must not change again. The "@long-weekend-planner"
+    # domain is an opaque identifier now, not the product name; calendar clients
+    # match events by UID, so renaming it would duplicate every imported event.
+    uid = _uid(dt.date(2026, 5, 22), dt.date(2026, 5, 26), "Memorial Day", "holiday")
+    assert uid == "83ceffc0378a345192d52228624db92ac90acd92@long-weekend-planner"
+
+
+def test_ics_prodid_uses_the_new_name():
+    config = build_config(preset="minimal")
+    holidays = resolve_year(config.holidays, 2026, config.workweek, config.observance)
+    ics = render_ics(config, {2026: holidays})
+    assert "PRODID:-//PTO Colada//EN" in ics
+    assert "Long Weekend" not in ics

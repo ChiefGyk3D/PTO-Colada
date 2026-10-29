@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from longweekend.cli import build_parser, main, resolve_window
-from longweekend.config import build_config, parse_date_ranges, parse_pto_by_year
+from pto_colada.cli import build_parser, main, resolve_window
+from pto_colada.config import build_config, parse_date_ranges, parse_pto_by_year
 
 
 class TestConfig:

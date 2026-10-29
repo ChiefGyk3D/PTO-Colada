@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import (
+from pto_colada.cli import main
+from pto_colada.config import (
     MAX_RANGE_DAYS,
     MAX_RANGE_TOTAL_DAYS,
     build_config,
@@ -100,7 +100,7 @@ class TestRanges:
         assert key in err and "longer than" in err
 
     def test_memory_error_is_a_clean_exit(self, monkeypatch, capsys):
-        import longweekend.cli as cli_module
+        import pto_colada.cli as cli_module
 
         def boom(**_kwargs):
             raise MemoryError

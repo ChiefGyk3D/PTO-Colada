@@ -41,28 +41,28 @@ holiday date forms (for --add and config files):
   Name=TUE on or after 11-02   first weekday on or after a date
 
 examples:
-  long-weekend                                  this year and next, US federal holidays
-  long-weekend --preset corporate --pto 15      plan 15 PTO days a year
-  long-weekend --preset federal --drop "Columbus Day" --add "Day After Thanksgiving=Thanksgiving+1"
-  long-weekend --pto 20 --min-break 7           aim for week-long breaks
-  long-weekend --preset tech --pto 15 --floating 2     two floating holidays on top
-  long-weekend --add "Good Friday" --add "Election Day" --pto 15
-  long-weekend --pto 15 --blackout 2026-04-01:2026-04-15 --commit 2026-07-20
-  long-weekend --pto 15 --format ics > timeoff.ics
-  long-weekend --pto 17 --curve                 where extra PTO stops paying off
-  long-weekend --pto 17 --min-return 2.5        stop when a day returns under 2.5 days
-  long-weekend --pto 17 --target-days-off 40    the fewest PTO days that reach 40
-  long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
+  pto-colada                                    this year and next, US federal holidays
+  pto-colada --preset corporate --pto 15        plan 15 PTO days a year
+  pto-colada --preset federal --drop "Columbus Day" --add "Day After Thanksgiving=Thanksgiving+1"
+  pto-colada --pto 20 --min-break 7             aim for week-long breaks
+  pto-colada --preset tech --pto 15 --floating 2       two floating holidays on top
+  pto-colada --add "Good Friday" --add "Election Day" --pto 15
+  pto-colada --pto 15 --blackout 2026-04-01:2026-04-15 --commit 2026-07-20
+  pto-colada --pto 15 --format ics > timeoff.ics
+  pto-colada --pto 17 --curve                   where extra PTO stops paying off
+  pto-colada --pto 17 --min-return 2.5          stop when a day returns under 2.5 days
+  pto-colada --pto 17 --target-days-off 40      the fewest PTO days that reach 40
+  pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
                                                 honest count, one goal, at most 8 breaks
-  long-weekend --pto 15 --goal vacations --min-vacation-days 9 --prefer 2026-12-24:2026-12-31
-  long-weekend --today 2026-11-02 --pto-hours 36 --refill-hours 120 --carryover 5 --through 2027-03-31
+  pto-colada --pto 15 --goal vacations --min-vacation-days 9 --prefer 2026-12-24:2026-12-31
+  pto-colada --today 2026-11-02 --pto-hours 36 --refill-hours 120 --carryover 5 --through 2027-03-31
                                                 plan from a date, in hours, across the new year
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="long-weekend",
+        prog="pto-colada",
         description=(
             "Find long weekends and plan PTO around the holidays your employer "
             "actually observes."
@@ -352,7 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--export-xlsx", metavar="FILE",
         help=(
             "write an Excel workbook with a summary and charts (needs --pto and "
-            "the optional extra: pip install 'long-weekend-planner[xlsx]')"
+            "the optional extra: pip install 'pto-colada[xlsx]')"
         ),
     )
     output.add_argument(

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import build_config, load_config_file
+from pto_colada.cli import main
+from pto_colada.config import build_config, load_config_file
 
 yaml = pytest.importorskip("yaml")
 

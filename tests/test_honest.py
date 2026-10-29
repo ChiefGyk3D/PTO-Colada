@@ -11,7 +11,7 @@ import datetime as dt
 
 import pytest
 
-from longweekend.honest import score_pto, thanksgiving_bridge
+from pto_colada.honest import score_pto, thanksgiving_bridge
 
 D = dt.date
 

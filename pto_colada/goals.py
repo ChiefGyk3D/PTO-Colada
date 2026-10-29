@@ -1,8 +1,8 @@
 """Goal-driven PTO planning on top of the honest counting rules.
 
-The classic planner (:mod:`longweekend.planner`) maximises days inside breaks
+The classic planner (:mod:`pto_colada.planner`) maximises days inside breaks
 of a minimum length, whether or not a break cost any PTO. This planner scores
-what :mod:`longweekend.honest` reports: only breaks that contain at least one
+what :mod:`pto_colada.honest` reports: only breaks that contain at least one
 PTO day count, each calendar date once, and a break crossing a year boundary
 is valued whole.
 

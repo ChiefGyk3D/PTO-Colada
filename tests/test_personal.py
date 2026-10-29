@@ -7,17 +7,17 @@ import json
 
 import pytest
 
-from longweekend.cli import build_parser, main
-from longweekend.conferences import (
+from pto_colada.cli import build_parser, main
+from pto_colada.conferences import (
     find_conference,
     load_conferences,
     occurrences_for,
 )
-from longweekend.config import build_config
-from longweekend.observances import OBSERVANCE_SETS, resolve_observances
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import DayKind, build_days
-from longweekend.catalog import PRESETS, resolve_year
+from pto_colada.config import build_config
+from pto_colada.observances import OBSERVANCE_SETS, resolve_observances
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import DayKind, build_days
+from pto_colada.catalog import PRESETS, resolve_year
 
 
 class TestResolvingObservances:
@@ -274,7 +274,7 @@ class TestWizard:
     """The wizard's real job is printing the command you should have typed."""
 
     def run(self, answers):
-        from longweekend.wizard import run_wizard
+        from pto_colada.wizard import run_wizard
 
         parser = build_parser()
         args = parser.parse_args([])
@@ -287,7 +287,7 @@ class TestWizard:
         argv, output = self.run([""] * 10)
         assert "--pto" in argv
         assert main(argv) == 0
-        assert "long-weekend" in output
+        assert "pto-colada" in output
 
     def test_answers_become_flags(self):
         argv, _ = self.run(["20", "3", "5", "corporate", "Yom Kippur", "DEF CON", "2", "vacations", "3"])
@@ -312,4 +312,4 @@ class TestWizard:
     def test_it_prints_the_equivalent_command(self):
         _, output = self.run(["20"] + [""] * 9)
         assert "Next time, skip the questions:" in output
-        assert "long-weekend --pto 20" in output
+        assert "pto-colada --pto 20" in output
