@@ -48,17 +48,30 @@ class GoalSummary:
     prefer: List[dt.date] = field(default_factory=list)
     blackout_count: int = 0
     exact_breaks_note: str = ""
+    #: Holidays outside the selected window that the plan depends on (padding or featured breaks).
+    context_holidays: List[ResolvedHoliday] = field(default_factory=list)
 
 
 def provisional_assumptions(
     holidays_by_year: Dict[int, List[ResolvedHoliday]],
+    extra: Sequence[ResolvedHoliday] = (),
 ) -> List[ResolvedHoliday]:
-    """Holidays in the window whose date is not confirmed, in date order.
+    """Holidays whose date is not confirmed and that the result can depend on.
 
-    Any result computed from the calendar depends on these days, so a
-    non-empty list makes the whole result provisional.
+    That is every unconfirmed holiday in the selected window, plus any in
+    ``extra`` (holidays in the padding around the window or inside a featured
+    break, which the goal planner looks at). A date that also carries a
+    confirmed holiday is off for certain, so it is not listed.
     """
-    found = [h for year in sorted(holidays_by_year) for h in holidays_by_year[year] if h.unconfirmed]
+    seen = set()
+    pool: List[ResolvedHoliday] = []
+    for holiday in [h for year in sorted(holidays_by_year) for h in holidays_by_year[year]] + list(extra):
+        key = (holiday.name, holiday.observed)
+        if key not in seen:
+            seen.add(key)
+            pool.append(holiday)
+    certain = {h.observed for h in pool if not h.unconfirmed}
+    found = [h for h in pool if h.unconfirmed and h.observed not in certain]
     return sorted(found, key=lambda h: h.observed)
 
 
@@ -96,7 +109,7 @@ def render_text(
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
     lines.append("")
-    lines.extend(_provisional_text(provisional_assumptions(holidays_by_year)))
+    lines.extend(_provisional_text(provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())))
     if goal is not None:
         lines.extend(_render_goal(goal, plan))
         if show_holidays:
@@ -598,7 +611,7 @@ def render_json(
         },
         "years": {},
     }
-    assumptions = provisional_assumptions(holidays_by_year)
+    assumptions = provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())
     if assumptions:
         payload["provisional"] = True
         payload["assumptions"] = [
@@ -757,10 +770,11 @@ def render_ics(
     plan: Optional[PtoPlan] = None,
     include_holidays: bool = True,
     efficiency: bool = False,
+    goal: Optional[GoalSummary] = None,
 ) -> str:
     """Emit an all-day-event calendar of holidays, PTO days and planned breaks."""
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    assumptions = provisional_assumptions(holidays_by_year)
+    assumptions = provisional_assumptions(holidays_by_year, goal.context_holidays if goal else ())
     caveat = ""
     if assumptions:
         caveat = "PROVISIONAL: depends on unconfirmed days (" + ", ".join(

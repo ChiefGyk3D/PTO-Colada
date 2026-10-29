@@ -12,7 +12,7 @@ from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
 from .config import CompanyConfig, build_config
 from .efficiency import ReturnCurve, return_curve
-from .goals import GOALS, build_goal_days, goal_spec, optimize_goal
+from .goals import GOALS, PAD_DAYS, build_goal_days, goal_spec, optimize_goal
 from .honest import score_pto
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import GoalSummary, render_ics, render_json, render_text
@@ -523,6 +523,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             render_ics(
                 config, holidays_by_year, plan,
                 include_holidays=not args.no_holidays, efficiency=show_efficiency,
+                goal=goal_summary,
             )
         )
     else:
@@ -611,6 +612,9 @@ def _plan_for_goal(
         min_break=result.spec.thresholds[0][0],
         floating_by_year=dict(result.floating_by_year),
     )
+    one = dt.timedelta(days=1)
+    pad_start, pad_end = start - PAD_DAYS * one, end + PAD_DAYS * one
+    featured_dates = {x for b in report.breaks for x in b.dates}
     summary = GoalSummary(
         goal=chosen_name,
         spec=result.spec,
@@ -621,6 +625,11 @@ def _plan_for_goal(
         max_breaks=config.max_breaks,
         prefer=sorted(config.prefer),
         blackout_count=len(config.blackout),
+        context_holidays=[
+            h for h in all_holidays
+            if pad_start <= h.observed <= pad_end
+            or h.observed in featured_dates
+        ],
     )
     return plan, summary
 

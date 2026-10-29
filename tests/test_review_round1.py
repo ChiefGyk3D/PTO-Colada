@@ -1,0 +1,109 @@
+"""Fix round 1: provisional scope, same-date status, carryover display, README pins."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import shlex
+
+import pytest
+
+from longweekend.catalog import ResolvedHoliday
+from longweekend.cli import main
+from longweekend.report import provisional_assumptions
+
+D = dt.date
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+EXAMPLE = os.path.join(ROOT, "examples", "employer-2027.json")
+
+
+def cli(capsys, *argv, expect=0):
+    if expect == 0:
+        assert main(list(argv)) == 0
+        return capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        main(list(argv))
+    assert exc.value.code == expect
+    return capsys.readouterr().err
+
+
+def write(tmp_path, data, name="c.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
+# ----------------------------------------------------------- item 3: provisional scope
+
+
+def adj_config(tmp_path, assumed_date="2028-01-03"):
+    return write(tmp_path, {
+        "observance": "none", "pto_days": 1,
+        "holidays": [
+            {"name": "Conf", "date": "2027-12-30", "status": "confirmed"},
+            {"name": "NY28", "date": assumed_date, "status": "assumed"},
+        ],
+    })
+
+
+GOAL = ["--start-year", "2027", "--years", "1", "--goal", "weekends", "--pto", "3"]
+
+
+def test_unconfirmed_day_in_an_adjacent_year_labels_every_format(tmp_path, capsys):
+    path = adj_config(tmp_path)
+    text = cli(capsys, "--config", path, *GOAL)
+    assert "PROVISIONAL" in text and "NY28" in text.split("PROVISIONAL", 1)[1]
+    data = json.loads(cli(capsys, "--config", path, *GOAL, "--format", "json"))
+    assert data["provisional"] is True
+    assert [a["name"] for a in data["assumptions"]] == ["NY28"]
+    ics = cli(capsys, "--config", path, *GOAL, "--format", "ics")
+    assert "X-LWP-PROVISIONAL:TRUE" in ics and "NY28" in ics
+
+
+def test_unconfirmed_day_far_outside_the_padded_window_is_ignored(tmp_path, capsys):
+    path = adj_config(tmp_path, assumed_date="2028-06-01")
+    text = cli(capsys, "--config", path, *GOAL)
+    assert "PROVISIONAL" not in text
+    assert "provisional" not in json.loads(cli(capsys, "--config", path, *GOAL, "--format", "json"))
+
+
+def test_confirmed_only_is_not_provisional(tmp_path, capsys):
+    path = write(tmp_path, {"observance": "none", "pto_days": 1, "holidays": [
+        {"name": "A", "date": "2027-12-30", "status": "confirmed"},
+        {"name": "B", "date": "2028-01-03", "status": "confirmed"}]})
+    assert "PROVISIONAL" not in cli(capsys, "--config", path, *GOAL)
+
+
+def test_unconfirmed_inside_the_window_still_labels_everything(tmp_path, capsys):
+    path = write(tmp_path, {"observance": "none", "pto_days": 1, "holidays": [
+        {"name": "Mid", "date": "2027-06-02", "status": "assumed"}]})
+    assert "PROVISIONAL" in cli(capsys, "--config", path, *GOAL)
+
+
+def test_extra_holidays_argument_adds_to_the_window():
+    h = ResolvedHoliday("Late", D(2028, 2, 10), D(2028, 2, 10), "assumed")
+    assert provisional_assumptions({2027: []}) == []
+    assert provisional_assumptions({2027: []}, extra=[h]) == [h]
+
+
+# ----------------------------------------------------------- item 9: same date
+
+
+def test_a_date_with_a_confirmed_holiday_is_not_unconfirmed():
+    a = ResolvedHoliday("A", D(2027, 1, 1), D(2027, 1, 1), "confirmed")
+    b = ResolvedHoliday("B", D(2027, 1, 1), D(2027, 1, 1), "assumed")
+    c = ResolvedHoliday("C", D(2027, 5, 31), D(2027, 5, 31), "assumed")
+    assert provisional_assumptions({2027: [a, b, c]}) == [c]
+    assert provisional_assumptions({2027: [a, b]}) == []
+
+
+def test_same_date_confirmed_and_assumed_end_to_end(tmp_path, capsys):
+    path = write(tmp_path, {"observance": "none", "pto_days": 3, "holidays": [
+        {"name": "A", "date": "2027-01-01", "status": "confirmed"},
+        {"name": "B", "date": "2027-01-01", "status": "assumed"}]})
+    argv = ["--config", path, "--start-year", "2027", "--years", "1"]
+    assert "PROVISIONAL" not in cli(capsys, *argv)
+    assert "provisional" not in json.loads(cli(capsys, *argv, "--format", "json"))
+    assert "PROVISIONAL" not in cli(capsys, *argv, "--goal", "weekends")
