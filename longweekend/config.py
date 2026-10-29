@@ -239,7 +239,7 @@ _PLAIN_INT = re.compile(r"[-+]?(?:0|[1-9][0-9]{0,%d})" % (_MAX_INT_DIGITS - 1))
 _REJECTED_TAGS = ("binary", "set", "omap", "pairs")
 
 
-def _read_regular_file(path: str) -> bytes:
+def _read_regular_file(path: str, label: str = "config file") -> bytes:
     """Read a config file, refusing anything but a regular file within the size cap.
 
     The file is opened non-blocking and checked with ``fstat`` on the open
@@ -249,9 +249,9 @@ def _read_regular_file(path: str) -> bytes:
     try:
         fd = os.open(path, flags)
     except FileNotFoundError:
-        raise FileNotFoundError(f"config file not found: {path}") from None
+        raise FileNotFoundError(f"{label} not found: {path}") from None
     except OSError as exc:
-        raise ValueError(f"cannot open config file {path}: {exc.strerror}") from None
+        raise ValueError(f"cannot open {label} {path}: {exc.strerror}") from None
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -447,6 +447,33 @@ def _check_depth(data: object, path: str) -> None:
         if depth > MAX_CONFIG_DEPTH:
             raise ValueError(f"{path} is nested too deeply (limit {MAX_CONFIG_DEPTH} levels)")
         stack.extend((child, depth + 1) for child in children)
+
+
+def load_json_file(path: str, label: str = "config file") -> object:
+    """Read a JSON file under the same limits as a config file.
+
+    Regular file only, within :data:`MAX_CONFIG_BYTES`; duplicate keys, over-long
+    integers, lone surrogates, and nesting or node counts past the config limits
+    are all ``ValueError``. Any top-level JSON value is returned.
+    """
+    raw = _read_regular_file(path, label)
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError(f"{path} is not valid UTF-8 text") from None
+    try:
+        data = json.loads(text, **_json_hooks(path))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    except RecursionError:
+        raise ValueError(f"{path} is nested too deeply to read") from None
+    except (ValueError, MemoryError):
+        raise
+    except Exception:
+        raise ValueError(f"{path} is not valid JSON: a value could not be read") from None
+    _check_depth(data, path)
+    _check_text(data, path)
+    return data
 
 
 def load_config_file(path: str) -> Dict[str, object]:

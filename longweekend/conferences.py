@@ -13,7 +13,6 @@ catalog; the format is the same and your entries win on a name clash.
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -96,13 +95,10 @@ def load_conferences(path: Optional[str] = None) -> List[Conference]:
 
 
 def _read(path: str) -> List[Conference]:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"conference file not found: {path}")
-    with open(path, "r", encoding="utf-8") as handle:
-        try:
-            data = json.load(handle)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    # Imported here: config imports this module at load time.
+    from .config import load_json_file
+
+    data = load_json_file(path, label="conference file")
 
     entries = data.get("conferences") if isinstance(data, dict) else data
     if not isinstance(entries, list):
@@ -112,8 +108,11 @@ def _read(path: str) -> List[Conference]:
     for entry in entries:
         if not isinstance(entry, dict) or "name" not in entry:
             raise ValueError(f"{path}: every conference needs a 'name': {entry!r}")
+        raw_dates = entry.get("dates") or {}
+        if not isinstance(raw_dates, dict):
+            raise ValueError(f"{path}: {entry['name']} 'dates' must be a mapping of year to [start, end]")
         dates: Dict[int, tuple] = {}
-        for year, span in (entry.get("dates") or {}).items():
+        for year, span in raw_dates.items():
             if not isinstance(span, list) or len(span) != 2:
                 raise ValueError(
                     f"{path}: {entry['name']} {year} must be [start, end] in YYYY-MM-DD"
@@ -122,15 +121,27 @@ def _read(path: str) -> List[Conference]:
             if end < start:
                 raise ValueError(f"{path}: {entry['name']} {year} ends before it starts")
             dates[int(year)] = (start, end)
+        aliases = entry.get("aliases", ())
+        if not isinstance(aliases, (list, tuple)) or not all(isinstance(a, str) for a in aliases):
+            raise ValueError(f"{path}: {entry['name']} 'aliases' must be a list of text")
+        recurrence = entry.get("recurrence")
+        if recurrence is not None:
+            if not isinstance(recurrence, dict) or not isinstance(recurrence.get("when"), str):
+                raise ValueError(
+                    f"{path}: {entry['name']} 'recurrence' needs a text 'when' rule"
+                )
+            days = recurrence.get("days", 1)
+            if isinstance(days, bool) or not isinstance(days, int):
+                raise ValueError(f"{path}: {entry['name']} recurrence 'days' must be a whole number")
         out.append(
             Conference(
                 name=str(entry["name"]),
                 city=str(entry.get("city", "")),
                 url=str(entry.get("url", "")),
                 note=str(entry.get("note", "")),
-                aliases=tuple(entry.get("aliases", ())),
+                aliases=tuple(aliases),
                 dates=dates,
-                recurrence=entry.get("recurrence"),
+                recurrence=recurrence,
             )
         )
     return out

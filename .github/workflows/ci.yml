@@ -53,6 +53,7 @@ jobs:
         python -m longweekend.cli --list-conferences > /dev/null
         python -m longweekend.cli --pto 15 --observe jewish --years 1 > /dev/null
         python -m longweekend.cli --pto 15 --conference "DEF CON" --years 1 > /dev/null
+        python -m longweekend.cli --config examples/employer-2027.yaml --goal balanced --start-year 2027 --years 1 > /dev/null
       docker-build: false   # no Dockerfile in this repository
 
   security:
