@@ -12,9 +12,11 @@ from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
 from .config import CompanyConfig, build_config
 from .efficiency import ReturnCurve, return_curve
+from .goals import GOALS, PAD_DAYS, build_goal_days, goal_spec, optimize_goal
+from .honest import score_pto
 from .planner import PtoBudget, PtoPlan, optimize_pto
-from .report import render_ics, render_json, render_text
-from .schedule import Opportunity, build_days, find_opportunities
+from .report import GoalSummary, render_ics, render_json, render_text
+from .schedule import Break, Day, Opportunity, build_days, find_opportunities
 
 __all__ = ["main", "build_parser"]
 
@@ -40,6 +42,9 @@ examples:
   long-weekend --pto 17 --curve                 where extra PTO stops paying off
   long-weekend --pto 17 --min-return 2.5        stop when a day returns under 2.5 days
   long-weekend --pto 17 --target-days-off 40    the fewest PTO days that reach 40
+  long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
+                                                honest count, one goal, at most 8 breaks
+  long-weekend --pto 15 --goal vacations --min-vacation-days 9 --prefer 2026-12-24:2026-12-31
 """
 
 
@@ -134,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     pto.add_argument(
-        "--style", choices=("weekends", "vacations"), default="weekends",
+        "--style", choices=("weekends", "vacations"), default=None,
         help=(
             "how to spend budget left over after bridging holidays: 'weekends' "
             "(default) makes as many long weekends as possible, 'vacations' "
@@ -152,6 +157,31 @@ def build_parser() -> argparse.ArgumentParser:
     pto.add_argument(
         "--commit", action="append", default=[], dest="committed", metavar="DATE[:DATE]",
         help="PTO you have already booked; charged to the budget (repeatable)",
+    )
+
+    goals = parser.add_argument_group(
+        "goals: what kind of time off to plan for (honest count; needs a PTO budget)"
+    )
+    goals.add_argument(
+        "--goal", choices=GOALS,
+        help=(
+            "weekends: frequent long weekends (each day in a PTO break of 3+ days "
+            "scores 1); vacations: fewer, longer trips (only breaks of "
+            "--min-vacation-days or more score); balanced: weekends plus a second "
+            "point for every day in a vacation. Counts only breaks that contain PTO"
+        ),
+    )
+    goals.add_argument(
+        "--min-vacation-days", type=int, metavar="N",
+        help="shortest break that counts as a vacation (default: 7); implies --goal vacations",
+    )
+    goals.add_argument(
+        "--prefer", action="append", default=[], metavar="DATE[:DATE]",
+        help="dates you would like to take off; each one taken earns a small bonus (repeatable)",
+    )
+    goals.add_argument(
+        "--max-breaks", type=int, metavar="N",
+        help="plan at most N breaks that contain PTO (exact; the method is stated in the output)",
     )
 
     efficiency = parser.add_argument_group("efficiency: how much PTO is worth spending")
@@ -360,6 +390,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             target_days_off=args.target_days_off,
             blackout=args.blackout,
             committed=args.committed,
+            goal=args.goal,
+            min_vacation_days=args.min_vacation_days,
+            prefer=args.prefer,
+            max_breaks=args.max_breaks,
             observe=args.observe,
             conferences=args.conference,
             conference_file=args.conference_file,
@@ -368,8 +402,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             diaspora=not args.israel,
             include_erev=args.erev,
         )
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError, OverflowError) as exc:
         parser.error(str(exc))
+        return 2  # pragma: no cover - parser.error exits
+    except MemoryError:
+        parser.error("not enough memory to read this configuration")
         return 2  # pragma: no cover - parser.error exits
 
     if not config.holidays:
@@ -406,7 +443,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if wants_curve and not has_budget:
         parser.error("--curve, --min-return and --target-days-off need a PTO budget: add --pto")
         return 2  # pragma: no cover - parser.error exits
-    if has_budget:
+    goal_summary: Optional[GoalSummary] = None
+    if config.wants_goal:
+        if not has_budget:
+            parser.error("--goal and its options need a PTO budget: add --pto")
+            return 2  # pragma: no cover - parser.error exits
+        if args.curve:
+            parser.error(
+                "--curve belongs to the classic planner and cannot be combined with --goal "
+                "or its options"
+            )
+            return 2  # pragma: no cover - parser.error exits
+        if args.efficiency:
+            parser.error(
+                "--efficiency belongs to the classic planner and cannot be combined with "
+                "--goal or its options; the goal output already gives the honest count"
+            )
+            return 2  # pragma: no cover - parser.error exits
+        if args.style is not None:
+            parser.error("--style belongs to the classic planner; use --goal instead")
+            return 2  # pragma: no cover - parser.error exits
+        try:
+            plan, goal_summary = _plan_for_goal(
+                config, days, all_holidays, start, end, start_year, end_year
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+            return 2  # pragma: no cover - parser.error exits
+    elif has_budget:
         budget = PtoBudget(
             per_year=dict(config.pto_by_year),
             default=config.pto_days or 0,
@@ -460,6 +524,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             render_json(
                 config, holidays_by_year, opportunities_by_year, plan,
                 efficiency=show_efficiency, curve=shown_curve, objective=objective,
+                goal=goal_summary,
             )
         )
     elif args.format == "ics":
@@ -467,6 +532,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             render_ics(
                 config, holidays_by_year, plan,
                 include_holidays=not args.no_holidays, efficiency=show_efficiency,
+                goal=goal_summary,
             )
         )
     else:
@@ -480,10 +546,120 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 efficiency=show_efficiency,
                 curve=shown_curve,
                 objective=objective,
+                goal=goal_summary,
             ),
             end="",
         )
     return 0
+
+
+def _rolled_in(budget: PtoBudget, result, years: Sequence[int]) -> Dict[int, int]:
+    """Days each year received from the one before, mirroring the planner's rollover rule."""
+    rolled: Dict[int, int] = {}
+    previous = None
+    for year in years:
+        if previous is not None:
+            available = (
+                result.granted_by_year.get(previous, 0)
+                + result.floating_by_year.get(previous, 0)
+                + rolled.get(previous, 0)
+            )
+            left = max(0, available - result.spent_by_year.get(previous, 0))
+            cap = min(budget.carryover, result.granted_by_year.get(previous, 0))
+            rolled[year] = min(left, cap)
+        previous = year
+    return {y: n for y, n in rolled.items() if n}
+
+
+def _plan_for_goal(
+    config: CompanyConfig,
+    window_days: Sequence[Day],
+    all_holidays: Sequence[ResolvedHoliday],
+    start: dt.date,
+    end: dt.date,
+    start_year: int,
+    end_year: int,
+):
+    """Plan with the chosen goal and score it, and the other goals, with the honest count."""
+    budget = PtoBudget(
+        per_year=dict(config.pto_by_year),
+        default=config.pto_days or 0,
+        carryover=config.carryover,
+        floating_per_year=dict(config.floating_by_year),
+        floating=config.floating_days or 0,
+    )
+    names: Dict[dt.date, List[str]] = {}
+    for holiday in all_holidays:
+        bucket = names.setdefault(holiday.observed, [])
+        if holiday.name not in bucket:
+            bucket.append(holiday.name)
+    holiday_names = {date: " / ".join(parts) for date, parts in names.items()}
+    padded = build_goal_days(start, end, all_holidays, config.workweek, config.blackout)
+    years = list(range(start_year, end_year + 1))
+    chosen_name = config.effective_goal
+    min_break = config.min_break if config.min_break_explicit else None
+
+    results = {}
+    reports = {}
+    for name in GOALS:
+        spec = goal_spec(name, min_break=min_break, min_vacation_days=config.min_vacation_days)
+        result = optimize_goal(
+            padded,
+            budget,
+            spec,
+            window=(start, end),
+            committed=config.committed,
+            prefer=config.prefer,
+            max_breaks=config.max_breaks,
+            max_consecutive_pto=config.max_consecutive_pto,
+        )
+        requested = set(result.pto_dates) | {c for c in config.committed if start <= c <= end}
+        grants = {
+            y: result.granted_by_year.get(y, 0) + result.floating_by_year.get(y, 0)
+            for y in years
+        }
+        results[name] = result
+        reports[name] = score_pto(
+            requested, holiday_names, workweek=config.workweek, years=years, budgets=grants,
+            carried=_rolled_in(budget, result, years),
+        )
+
+    result, report = results[chosen_name], reports[chosen_name]
+    by_date = {d.date: d for d in result.days}
+    breaks = [
+        Break(start=b.start, end=b.end, days=[by_date[x] for x in b.dates if x in by_date])
+        for b in report.breaks
+    ]
+    plan = PtoPlan(
+        days=[d for d in result.days if start <= d.date <= end],
+        breaks=breaks,
+        pto_dates=list(result.pto_dates),
+        budget=budget,
+        spent_by_year=dict(result.spent_by_year),
+        granted_by_year=dict(result.granted_by_year),
+        min_break=result.spec.thresholds[0][0],
+        floating_by_year=dict(result.floating_by_year),
+    )
+    one = dt.timedelta(days=1)
+    pad_start, pad_end = start - PAD_DAYS * one, end + PAD_DAYS * one
+    featured_dates = {x for b in report.breaks for x in b.dates}
+    summary = GoalSummary(
+        goal=chosen_name,
+        spec=result.spec,
+        method=result.method,
+        report=report,
+        comparison=[(name, reports[name]) for name in GOALS],
+        min_vacation_days=config.min_vacation_days,
+        max_breaks=config.max_breaks,
+        prefer=sorted(config.prefer),
+        blackout_count=len(config.blackout),
+        context_holidays=[
+            h for h in all_holidays
+            if pad_start <= h.observed <= pad_end
+            or h.observed in featured_dates
+        ],
+    )
+    return plan, summary
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -10,6 +10,7 @@ This module is deliberately dependency-free; all date math uses the stdlib.
 from __future__ import annotations
 
 import calendar as _calendar
+import dataclasses
 import datetime as dt
 import re
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ __all__ = [
     "NthWeekday",
     "RelativeTo",
     "ExplicitDate",
+    "STATUSES",
     "EasterRelative",
     "WeekdayOnOrAfter",
     "Rule",
@@ -153,12 +155,20 @@ class RelativeTo:
         return f"{self.anchor} {sign} {abs(self.offset)} day(s)"
 
 
+#: How sure we are of a dated holiday: ``confirmed`` (published by the
+#: employer), ``assumed`` (believed to be paid, not confirmed) or
+#: ``observed-unconfirmed`` (the holiday is paid, the observed date is a guess).
+STATUSES = ("confirmed", "assumed", "observed-unconfirmed")
+
+
 @dataclass(frozen=True)
 class ExplicitDate:
     """A one-off date, e.g. a company shutdown day announced for a single year."""
 
     name: str
     date: dt.date
+    #: ``None`` means the status was never stated; it counts as confirmed.
+    status: Optional[str] = None
 
     def actual(self, year: int, _resolved: Dict[str, dt.date]) -> Optional[dt.date]:
         return self.date if self.date.year == year else None
@@ -226,6 +236,12 @@ class ResolvedHoliday:
     name: str
     actual: dt.date
     observed: dt.date
+    #: Confirmation status of a dated holiday (see :data:`STATUSES`), if stated.
+    status: Optional[str] = None
+
+    @property
+    def unconfirmed(self) -> bool:
+        return self.status is not None and self.status != "confirmed"
 
     @property
     def shifted(self) -> bool:
@@ -357,7 +373,14 @@ def resolve_year(
     for rule, actual in ordered:
         observed = observed_date(actual, workweek, observance, taken)
         taken.add(observed)
-        resolved.append(ResolvedHoliday(name=rule.name, actual=actual, observed=observed))
+        resolved.append(
+            ResolvedHoliday(
+                name=rule.name,
+                actual=actual,
+                observed=observed,
+                status=getattr(rule, "status", None),
+            )
+        )
     resolved.sort(key=lambda h: (h.observed, h.name))
     return resolved
 
@@ -453,7 +476,11 @@ def _parse_when(name: str, when: str) -> Rule:
     match = _ISO_RE.match(when)
     if match:
         year, month, day = (int(g) for g in match.groups())
-        return ExplicitDate(name=name, date=dt.date(year, month, day))
+        try:
+            date = dt.date(year, month, day)
+        except ValueError:
+            raise ValueError(f"{name}: {when} is not a date") from None
+        return ExplicitDate(name=name, date=date)
 
     match = _MD_RE.match(when)
     if match:
@@ -501,8 +528,57 @@ def _parse_when(name: str, when: str) -> Rule:
     )
 
 
+#: Largest magnitude accepted for a whole number read from a config file.
+MAX_FILE_INTEGER = 1_000_000
+
+
+_PLAIN_DECIMAL = re.compile(r"[-+]?(?:0|[1-9][0-9]{0,17})")
+
+
+def whole_number(value: object, label: str) -> int:
+    """A whole number from a config file.
+
+    Accepts an int, a whole-valued float, or a string of plain decimal digits
+    (optional sign, ASCII digits, at most 18; nothing is trimmed). Null,
+    booleans, any other text, fractions, non-finite and absurdly large values
+    are errors.
+    """
+    if isinstance(value, str):
+        if not _PLAIN_DECIMAL.fullmatch(value):
+            raise ValueError(
+                f"{label} must be a whole number written as plain digits, like 15; "
+                f"write the number in plain decimal (got {value!r})"
+            )
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a whole number (got {value!r})")
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        raise ValueError(f"{label} must be a whole number (got {value!r})")
+    if value != int(value) or abs(value) > MAX_FILE_INTEGER:
+        raise ValueError(f"{label} must be a whole number of reasonable size (got {value!r})")
+    return int(value)
+
+
 def rule_from_mapping(data: Dict[str, object]) -> Rule:
     """Build a rule from a config-file mapping."""
+    rule = _rule_from_mapping(data)
+    if "status" not in data:
+        return rule
+    status = str(data["status"]).strip().lower()
+    if status not in STATUSES:
+        raise ValueError(
+            f"holiday {rule.name!r}: status must be one of {', '.join(STATUSES)} "
+            f"(got {data['status']!r})"
+        )
+    if not isinstance(rule, ExplicitDate):
+        raise ValueError(
+            f"holiday {rule.name!r}: 'status' is only supported on entries with an "
+            "explicit 'date' (a one-off day), not on recurring rules"
+        )
+    return dataclasses.replace(rule, status=status)
+
+
+def _rule_from_mapping(data: Dict[str, object]) -> Rule:
     if "name" not in data:
         raise ValueError(f"holiday entry is missing 'name': {data!r}")
     name = str(data["name"])
@@ -516,7 +592,7 @@ def rule_from_mapping(data: Dict[str, object]) -> Rule:
         return _parse_when(name, str(value))
     if "after" in data or "before" in data:
         anchor = str(data.get("after") or data["before"])
-        offset = int(data.get("days", 1))
+        offset = whole_number(data.get("days", 1), f"holiday {name!r}: 'days'")
         if "before" in data and not data.get("after"):
             offset = -abs(offset)
         return RelativeTo(name=name, anchor=anchor, offset=offset)
@@ -524,7 +600,7 @@ def rule_from_mapping(data: Dict[str, object]) -> Rule:
         if "month" not in data:
             raise ValueError(f"holiday {name!r}: 'weekday' requires 'month'")
         n = data.get("n", data.get("nth", 1))
-        n = -1 if str(n).lower() == "last" else int(n)
+        n = -1 if str(n).lower() == "last" else whole_number(n, f"holiday {name!r}: 'n'")
         return NthWeekday(
             name=name,
             month=parse_month(data["month"]),  # type: ignore[arg-type]
@@ -532,7 +608,7 @@ def rule_from_mapping(data: Dict[str, object]) -> Rule:
             n=n,
         )
     if "month" in data and "day" in data:
-        month, day = parse_month(data["month"]), int(data["day"])  # type: ignore[arg-type]
+        month, day = parse_month(data["month"]), whole_number(data["day"], f"holiday {name!r}: 'day'")  # type: ignore[arg-type]
         _validate_month_day(name, month, day)
         return FixedDate(name=name, month=month, day=day)
 

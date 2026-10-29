@@ -1,0 +1,16 @@
+{
+  "name": "Employer 2027 (example)",
+  "workweek": "MON-FRI",
+  "observance": "none",
+  "pto_days": 17,
+  "holidays": [
+    {"name": "New Year's Day", "date": "2027-01-01", "status": "confirmed"},
+    {"name": "Memorial Day", "date": "2027-05-31", "status": "assumed"},
+    {"name": "Independence Day (observed)", "date": "2027-07-05", "status": "observed-unconfirmed"},
+    {"name": "Labor Day", "date": "2027-09-06", "status": "assumed"},
+    {"name": "Thanksgiving", "date": "2027-11-25", "status": "confirmed"},
+    {"name": "Day After Thanksgiving", "date": "2027-11-26", "status": "confirmed"},
+    {"name": "Christmas (observed)", "date": "2027-12-24", "status": "observed-unconfirmed"},
+    {"name": "New Year's 2028 (observed)", "date": "2027-12-31", "status": "observed-unconfirmed"}
+  ]
+}
