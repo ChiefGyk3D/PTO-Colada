@@ -788,6 +788,7 @@ def render_ics(
         caveat = "PROVISIONAL: depends on unconfirmed days (" + ", ".join(
             h.name for h in assumptions
         ) + ")"
+    uncertain = {h.observed for h in assumptions}
     lines: List[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -815,7 +816,11 @@ def render_ics(
                             f"Observed holiday (actual date {holiday.actual.isoformat()})"
                             if holiday.shifted
                             else "Company holiday"
-                        ) + (f" PROVISIONAL: {_STATUS_NOTE.get(holiday.status or '', '')}" if holiday.unconfirmed else ""),
+                        ) + (
+                            f" PROVISIONAL: {_STATUS_NOTE.get(holiday.status or '', '')}"
+                            if holiday.unconfirmed and holiday.observed in uncertain
+                            else ""
+                        ),
                         stamp=stamp,
                         category="HOLIDAY",
                     )

@@ -293,5 +293,62 @@ def test_goal_mode_ics_with_hostile_names(tmp_path, capsys, evil):
 
 def test_normal_names_are_escaped_as_before():
     from longweekend.report import _escape
-    assert _escape("A, B; C\\D\nE") == "A\\, B\; C\\\\D\\nE"
+    assert _escape("A, B; C\\D\nE") == "A\\, B\\; C\\\\D\\nE"
     assert _escape("Plain Name (observed)") == "Plain Name (observed)"
+
+
+# ----------------------------------------------------------- round 2: pad and featured clauses (#7)
+
+PADDED = ["--start-year", "2027", "--years", "1", "--goal", "weekends", "--pto", "3"]
+
+
+def one_assumed(tmp_path, date):
+    return write(tmp_path, {"observance": "none", "pto_days": 3, "holidays": [
+        {"name": "Anchor", "date": "2027-06-02", "status": "confirmed"},
+        {"name": "Edge", "date": date, "status": "assumed"}]})
+
+
+@pytest.mark.parametrize("date", ["2028-01-25", "2028-01-31", "2026-12-01"])
+def test_assumed_day_inside_the_pad_but_in_no_break_is_provisional(tmp_path, capsys, date):
+    out = cli(capsys, "--config", one_assumed(tmp_path, date), *PADDED)
+    assert "PROVISIONAL" in out and "Edge" in out.split("PROVISIONAL", 1)[1]
+
+
+@pytest.mark.parametrize("date", ["2028-02-01", "2026-11-30"])
+def test_assumed_day_just_past_the_pad_is_not_flagged(tmp_path, capsys, date):
+    path = one_assumed(tmp_path, date)
+    assert "PROVISIONAL" not in cli(capsys, "--config", path, *PADDED)
+    data = json.loads(cli(capsys, "--config", path, *PADDED, "--format", "json"))
+    assert "provisional" not in data
+
+
+def test_assumed_day_beyond_the_pad_but_inside_a_featured_break_is_provisional(tmp_path, capsys):
+    holidays = []
+    day = D(2028, 1, 3)
+    while day <= D(2028, 2, 15):
+        if day.weekday() < 5:
+            status = "assumed" if day == D(2028, 2, 10) else "confirmed"
+            holidays.append({"name": "H%s" % day.isoformat(), "date": day.isoformat(), "status": status})
+        day += dt.timedelta(1)
+    path = write(tmp_path, {"observance": "none", "pto_days": 1, "holidays": holidays})
+    argv = ["--config", path, "--start-year", "2027", "--years", "1", "--goal", "weekends",
+            "--pto", "1", "--format", "json"]
+    data = json.loads(cli(capsys, *argv))
+    assert max(b["end"] for b in data["honest"]["breaks"]) >= "2028-02-10"
+    assert data["provisional"] is True
+    assert [a["observed"] for a in data["assumptions"]] == ["2028-02-10"]
+
+
+# ----------------------------------------------------------- round 2: same-date ICS consistency (#7)
+
+
+def test_same_date_confirmed_and_assumed_carries_no_provisional_wording_anywhere(tmp_path, capsys):
+    path = write(tmp_path, {"observance": "none", "pto_days": 3, "holidays": [
+        {"name": "A", "date": "2027-01-01", "status": "confirmed"},
+        {"name": "B", "date": "2027-01-01", "status": "assumed"}]})
+    base = ["--config", path, "--start-year", "2027", "--years", "1"]
+    for extra in ([], ["--goal", "weekends"]):
+        assert "PROVISIONAL" not in cli(capsys, *base, *extra)
+        assert "provisional" not in json.loads(cli(capsys, *base, *extra, "--format", "json"))
+        ics = cli(capsys, *base, *extra, "--format", "ics")
+        assert "PROVISIONAL" not in ics and "X-LWP-ASSUMPTION" not in ics
