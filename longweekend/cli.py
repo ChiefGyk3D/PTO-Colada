@@ -42,7 +42,7 @@ examples:
   long-weekend --pto 17 --curve                 where extra PTO stops paying off
   long-weekend --pto 17 --min-return 2.5        stop when a day returns under 2.5 days
   long-weekend --pto 17 --target-days-off 40    the fewest PTO days that reach 40
-  long-weekend --config examples/employer-2027.yaml --goal balanced --max-breaks 8
+  long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
                                                 honest count, one goal, at most 8 breaks
   long-weekend --pto 15 --goal vacations --min-vacation-days 9 --prefer 2026-12-24:2026-12-31
 """

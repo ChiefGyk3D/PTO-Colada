@@ -179,3 +179,60 @@ def test_whole_valued_integers_still_work(tmp_path):
                             "holidays": [{"name": "X", "date": "2027-03-03"}]})
     config = build_config(config_path=path)
     assert (config.max_breaks, config.min_vacation_days) == (2, 6)
+
+
+# ----------------------------------------------------------- item 1: README cannot drift
+
+README = os.path.join(ROOT, "README.md")
+
+
+def _readme_commands():
+    text = open(README, encoding="utf-8").read()
+    commands = []
+    for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.S):
+        for line in block.splitlines():
+            if line.startswith("long-weekend") and "employer-2027" in line:
+                commands.append(line.split("#", 1)[0].strip())
+    return text, commands
+
+
+def test_every_readme_example_command_names_the_year_window():
+    _, commands = _readme_commands()
+    assert len(commands) >= 5
+    for command in commands:
+        assert "--start-year 2027" in command and "--years 1" in command, command
+
+
+def test_every_readme_example_command_runs_and_plans_one_year(capsys):
+    _, commands = _readme_commands()
+    for command in commands:
+        argv = shlex.split(command)[1:]
+        argv = [a.replace("examples/", os.path.join(ROOT, "examples") + os.sep) for a in argv]
+        if "--goal" in argv:
+            argv += ["--format", "json"]
+            assert main(argv) == 0
+            data = json.loads(capsys.readouterr().out)
+            assert data["honest"]["pto_used"] <= 17, command
+            assert {b["year"] for b in data["honest"]["budgets"]} == {2027}, command
+        else:
+            assert main(argv) == 0, command
+            capsys.readouterr()
+
+
+@pytest.mark.parametrize("label,extra,numbers", [
+    ("weekends", ["--goal", "weekends"], (17, 59, 5)),
+    ("weekends --max-breaks 14", ["--goal", "weekends", "--max-breaks", "14"], (14, 55, 10)),
+    ("balanced", ["--goal", "balanced"], (6, 45, 10)),
+    ("vacations", ["--goal", "vacations"], (4, 39, 12)),
+])
+def test_readme_table_matches_the_printed_numbers(capsys, label, extra, numbers):
+    text, _ = _readme_commands()
+    row = "| `%s` | %d | %d | %d |" % ((label,) + numbers)
+    assert row in text
+    path = os.path.join(ROOT, "examples", "employer-2027.yaml")
+    pytest.importorskip("yaml")
+    argv = ["--config", path, "--start-year", "2027", "--years", "1", *extra, "--format", "json"]
+    assert main(argv) == 0
+    h = json.loads(capsys.readouterr().out)["honest"]
+    assert (h["breaks_count"], h["total_days"], h["longest"]) == numbers
+    assert h["pto_used"] == 17

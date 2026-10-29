@@ -432,10 +432,10 @@ Pass any of these and the planner scores by the rules above instead of the
 classic days-in-breaks score. They need a PTO budget.
 
 ```
-long-weekend --config examples/employer-2027.yaml --goal weekends
-long-weekend --config examples/employer-2027.yaml --goal vacations --min-vacation-days 9
-long-weekend --config examples/employer-2027.yaml --goal balanced --max-breaks 8
-long-weekend --config examples/employer-2027.yaml --goal weekends --prefer 2027-08-13 --blackout 2027-03-01:2027-03-12
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal vacations --min-vacation-days 9
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --prefer 2027-08-13 --blackout 2027-03-01:2027-03-12
 ```
 
 | Goal | What a PTO break of `L` days is worth |
@@ -451,7 +451,10 @@ not to buy a day that does nothing). `--blackout` works as before.
 same exact dynamic program as the classic planner with a break counter added,
 so the cap is exact; the output says so. `--min-vacation-days` alone means
 `--goal vacations`; the other options alone mean `--goal weekends`. Goals do
-not combine with `--curve`, `--min-return`, `--target-days-off` or `--style`.
+not combine with `--curve`, `--efficiency`, `--min-return`, `--target-days-off`
+or `--style`; they are rejected with a message, since the goal output already
+reports the honest count. A 5-year window with a high `--max-breaks` can take
+tens of seconds.
 All of these can also be set in a config file (`goal`, `min_vacation_days`,
 `prefer`, `max_breaks`).
 
@@ -460,8 +463,10 @@ prints a **Tradeoff** table. The largest total is not marked as best: many
 short breaks and a few long ones can cost the same PTO and give different
 totals and a different kind of rest.
 
-On the example employer file with 17 PTO (the numbers move if an unconfirmed
-day moves):
+On the example employer file for 2027 with 17 PTO (the commands above, with
+`--start-year 2027 --years 1`; without a window the tool plans this year and
+next and the budget applies to each, so the numbers differ; they also move if
+an unconfirmed day moves):
 
 | Goal | Breaks | Days off | Longest |
 | --- | ---: | ---: | ---: |
@@ -486,7 +491,11 @@ reproduce them, and `--goal weekends` finds a plan with more days than A.
   calendar days in total. The report calls this out whenever a plan has it.
 
 To score your own set of dates, commit them in full and let the planner have
-no choice: `--goal weekends --commit 2027-01-04 --commit 2027-12-27:2027-12-30`.
+no choice:
+
+```
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal weekends --commit 2027-01-04 --commit 2027-12-27:2027-12-30
+```
 
 ### Assumptions awaiting confirmation
 
