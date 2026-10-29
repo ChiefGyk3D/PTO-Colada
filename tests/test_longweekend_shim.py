@@ -66,3 +66,25 @@ def test_aliasing_does_not_rewrite_the_real_modules_spec():
     old = importlib.import_module("longweekend.conferences")
     assert old.__spec__.name == "pto_colada.conferences"
     assert old.__name__ == "pto_colada.conferences"
+
+
+def test_non_module_directory_is_not_aliased():
+    # ``pto_colada/data`` is a plain directory (namespace); before the rename
+    # ``longweekend.data`` did not import either.
+    assert (ROOT / "pto_colada" / "data").is_dir()
+    for name in ("longweekend.data", "pto_colada.data"):
+        sys.modules.pop(name, None)
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("longweekend.data")
+
+
+def test_old_class_paths_still_unpickle():
+    import pickle
+
+    from pto_colada.planner import PtoBudget
+
+    # protocol 0 stores the class path as text; point it at the old package name.
+    blob = pickle.dumps(PtoBudget, protocol=0)
+    assert b"pto_colada.planner" in blob
+    old = blob.replace(b"pto_colada.planner", b"longweekend.planner")
+    assert pickle.loads(old) is PtoBudget
