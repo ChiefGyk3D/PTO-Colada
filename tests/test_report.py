@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import re
 
 import pytest
 
 from longweekend.catalog import PRESETS, resolve_year
 from longweekend.config import build_config
 from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.report import _fold, render_ics, render_json, render_text
+from longweekend.report import _event, _fold, render_ics, render_json, render_text
 from longweekend.schedule import build_days, find_opportunities
 
 
@@ -114,3 +116,25 @@ class TestEndToEnd:
         # The committed week is Mon-Fri, so all five days are working days.
         assert config.committed <= taken
         assert plan.spent_by_year[2026] <= 15
+
+
+def _uid(start, end, summary, category):
+    lines = _event(start, end, summary, "desc", "20260101T000000Z", category)
+    (uid_line,) = [l for l in lines if l.startswith("UID:")]
+    return uid_line[len("UID:"):]
+
+
+def test_event_uid_stable_distinct_and_shaped():
+    a = dt.date(2026, 5, 22)
+    b = dt.date(2026, 5, 26)
+    base = _uid(a, b, "Memorial Day", "holiday")
+    assert base == _uid(a, b, "Memorial Day", "holiday")
+    assert re.fullmatch(r"[0-9a-f]{40}@long-weekend-planner", base)
+    seed = "holiday|2026-05-22|2026-05-26|Memorial Day"
+    assert base == hashlib.sha256(seed.encode("utf-8")).hexdigest()[:40] + "@long-weekend-planner"
+    others = {
+        _uid(a, b, "Memorial Day", "pto"),
+        _uid(a + dt.timedelta(days=1), b, "Memorial Day", "holiday"),
+        _uid(a, b, "Other", "holiday"),
+    }
+    assert base not in others and len(others) == 3
