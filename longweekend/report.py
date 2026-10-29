@@ -5,15 +5,25 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from dataclasses import dataclass, field
 
 from .catalog import WEEKDAY_NAMES, Observance, ResolvedHoliday
 from .config import CompanyConfig
 from .efficiency import ReturnCurve
+from .goals import PREFER_BONUS, GoalSpec
+from .honest import HonestBreak, HonestReport, thanksgiving_bridge
 from .planner import PtoPlan
 from .schedule import Break, Day, DayKind, Opportunity
 
-__all__ = ["render_text", "render_json", "render_ics", "provisional_assumptions"]
+__all__ = [
+    "GoalSummary",
+    "render_text",
+    "render_json",
+    "render_ics",
+    "provisional_assumptions",
+]
 
 _RULE = "-" * 72
 
@@ -21,6 +31,23 @@ _STATUS_NOTE = {
     "assumed": "assumed to be a paid day, not confirmed",
     "observed-unconfirmed": "holiday is paid, observed date not confirmed",
 }
+
+
+@dataclass
+class GoalSummary:
+    """Everything the goal-mode output needs besides the plan itself."""
+
+    goal: str
+    spec: GoalSpec
+    method: str
+    report: HonestReport
+    #: Every goal planned under the same constraints, in a fixed order.
+    comparison: List[Tuple[str, HonestReport]]
+    min_vacation_days: Optional[int] = None
+    max_breaks: Optional[int] = None
+    prefer: List[dt.date] = field(default_factory=list)
+    blackout_count: int = 0
+    exact_breaks_note: str = ""
 
 
 def provisional_assumptions(
@@ -64,11 +91,18 @@ def render_text(
     efficiency: bool = False,
     curve: Optional[ReturnCurve] = None,
     objective: Optional[Dict[str, Any]] = None,
+    goal: Optional[GoalSummary] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
     lines.append("")
     lines.extend(_provisional_text(provisional_assumptions(holidays_by_year)))
+    if goal is not None:
+        lines.extend(_render_goal(goal, plan))
+        if show_holidays:
+            for year in sorted(holidays_by_year):
+                lines.extend(_holiday_listing(year, holidays_by_year[year]))
+        return "\n".join(lines).rstrip() + "\n"
     if plan is not None:
         lines.extend(_render_headline(plan, config))
 
@@ -113,6 +147,178 @@ def render_text(
         if curve is not None:
             lines.extend(_render_curve(curve))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _holiday_listing(year: int, holidays: List[ResolvedHoliday]) -> List[str]:
+    lines = [f"Holidays {year}", _RULE]
+    for holiday in holidays:
+        note = ""
+        if holiday.shifted:
+            note = f"   (falls on {holiday.actual.strftime('%a %b %d')}, observed here)"
+        if holiday.unconfirmed:
+            note += f"   [{holiday.status}]"
+        lines.append(f"  {holiday.observed.strftime('%a %b %d')}  {holiday.name}{note}")
+    lines.append("")
+    return lines
+
+
+_GOAL_BLURB = {
+    "weekends": "frequent long weekends",
+    "vacations": "fewer, longer vacations",
+    "balanced": "a mix of long weekends and vacations",
+}
+
+
+def _span(item: HonestBreak) -> str:
+    if item.start.year == item.end.year:
+        return f"{item.start.strftime('%a %b %d')} - {item.end.strftime('%a %b %d, %Y')}"
+    return f"{item.start.strftime('%a %b %d, %Y')} - {item.end.strftime('%a %b %d, %Y')}"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _render_goal(goal: GoalSummary, plan: Optional[PtoPlan]) -> List[str]:
+    report = goal.report
+    lines: List[str] = []
+    lines.append(f"Goal: {goal.goal} - {_GOAL_BLURB[goal.goal]}   (method: {goal.method})")
+    scoring = " and ".join(
+        f"{w} point{'s' if w != 1 else ''} per day in a PTO break of {t}+ days"
+        for t, w in goal.spec.thresholds
+    )
+    lines.append(f"  Scoring: {scoring}.")
+    options = []
+    if goal.min_vacation_days is not None:
+        options.append(f"vacation minimum {goal.min_vacation_days} days")
+    if goal.max_breaks is not None:
+        options.append(f"at most {goal.max_breaks} PTO break(s)")
+    if goal.prefer:
+        options.append(f"{len(goal.prefer)} preferred date(s), bonus {PREFER_BONUS} point(s) each when taken")
+    if goal.blackout_count:
+        options.append(f"{goal.blackout_count} blackout date(s)")
+    if options:
+        lines.append("  Options: " + "; ".join(options) + ".")
+    lines.append("")
+
+    lines.append("Honest count (breaks that contain at least one PTO day; each calendar date once)")
+    lines.append(_RULE)
+    lines.append(
+        f"  {report.total_days} days off = {report.pto_used} PTO + "
+        f"{report.holidays_included} holidays + {report.weekend_days_included} weekend days"
+    )
+    lines.append(
+        f"  {_plural(report.breaks_count, 'break')}, longest {report.longest} days"
+    )
+    years = ", ".join(str(y) for y in report.years)
+    other = {y: n for y, n in report.days_by_year.items() if y not in report.years}
+    detail = (
+        " (" + ", ".join(f"{n} in {y}" for y, n in sorted(other.items())) + ")" if other else ""
+    )
+    lines.append(
+        f"  {report.days_in_years} days inside {years}, "
+        f"{report.days_adjacent} in adjacent years{detail}"
+    )
+    if report.free_breaks_count:
+        lines.append(
+            f"  Not counted: {report.free_breaks_count} other holiday break(s) of 3+ days "
+            "that cost no PTO"
+        )
+    if report.pto_uncharged:
+        lines.append("  Requested days that cost nothing (not counted as PTO):")
+        for date, why in report.pto_uncharged:
+            lines.append(f"    {date.strftime('%a %b %d, %Y')}  already a {why}")
+    lines.append("")
+
+    lines.append("Breaks")
+    lines.append(_RULE)
+    for item in report.breaks:
+        taken = ", ".join(d.strftime("%b %d") for d in item.pto_dates)
+        lines.append(f"  {item.length:2d} days  {_span(item):<36} {item.pto_cost:>2} PTO  take {taken}")
+        if item.holiday_names:
+            lines.append(f"{'':>12}covers {'; '.join(item.holiday_names)}")
+    if not report.breaks:
+        lines.append("  (none)")
+    lines.append("")
+
+    bridge = thanksgiving_bridge(report)
+    if bridge is not None:
+        lines.append(
+            f"Thanksgiving + Christmas/New Year bridge: {bridge.pto} PTO for "
+            f"{bridge.days} calendar days across two breaks"
+        )
+        lines.append(
+            f"  {_span(bridge.first)} ({bridge.first.pto_cost} PTO) and "
+            f"{_span(bridge.second)} ({bridge.second.pto_cost} PTO)"
+        )
+        lines.append("")
+
+    lines.append("PTO budget per year (PTO is charged to the year it is taken)")
+    lines.append(_RULE)
+    for row in report.budget_rows:
+        if row.granted is None:
+            lines.append(f"  {row.year}: {row.used} used")
+        else:
+            tail = f", {row.remaining} left over" if row.remaining else ""
+            if row.over:
+                tail = f", {row.over} OVER BUDGET"
+            lines.append(f"  {row.year}: {row.used} of {row.granted} used{tail}")
+    lines.append("")
+
+    lines.append("Every nonworking day of the year, shown separately (free, whatever you book)")
+    lines.append(_RULE)
+    for year in report.years:
+        row = report.annual[year]
+        lines.append(
+            f"  {year}: {row.weekend_days} weekend days + {row.holiday_days} holidays "
+            f"= {row.total} nonworking days"
+        )
+        if report.weekend_holidays:
+            on_weekend = [d for d in report.weekend_holidays if d.year == year]
+            if on_weekend:
+                lines.append(
+                    "    holiday(s) on a weekend, counted as weekend days: "
+                    + ", ".join(d.strftime("%a %b %d") for d in on_weekend)
+                )
+    lines.append("")
+
+    lines.extend(_render_tradeoff(goal))
+    return lines
+
+
+def _render_tradeoff(goal: GoalSummary) -> List[str]:
+    lines = [
+        "Tradeoff (same PTO, same holidays, same options; the goals reward different things)",
+        _RULE,
+        "  goal        breaks  days off  longest  avg break  shortest  PTO",
+    ]
+    rows = goal.comparison
+    for name, rep in rows:
+        avg = rep.total_days / rep.breaks_count if rep.breaks_count else 0.0
+        shortest = min((b.length for b in rep.breaks), default=0)
+        mark = "   <- your goal" if name == goal.goal else ""
+        lines.append(
+            f"  {name:<10} {rep.breaks_count:>7} {rep.total_days:>9} {rep.longest:>8} "
+            f"{avg:>10.1f} {shortest:>9} {rep.pto_used:>4}{mark}"
+        )
+    biggest = max(rows, key=lambda r: r[1].total_days)
+    longest = max(rows, key=lambda r: r[1].longest)
+    lines.append("")
+    lines.append(
+        "  Many short breaks and a few long ones can cost the same PTO and still give a different "
+        "headline total and a different kind of rest."
+    )
+    lines.append(
+        f"  Here the largest total is {biggest[1].total_days} days ({biggest[0]}), "
+        f"spread over {_plural(biggest[1].breaks_count, 'break')}; the longest stretch of "
+        f"rest is {longest[1].longest} days ({longest[0]})."
+    )
+    lines.append(
+        "  A bigger total is not automatically better: it may mean many 3 to 4 day breaks "
+        "and no time to travel or recover. Pick the shape you want, then read the total."
+    )
+    lines.append("")
+    return lines
 
 
 def _render_headline(plan: PtoPlan, config: CompanyConfig) -> List[str]:
@@ -363,6 +569,7 @@ def render_json(
     efficiency: bool = False,
     curve: Optional[ReturnCurve] = None,
     objective: Optional[Dict[str, Any]] = None,
+    goal: Optional[GoalSummary] = None,
 ) -> str:
     payload: Dict[str, object] = {
         "config": {
@@ -456,6 +663,17 @@ def render_json(
             if objective["kind"] == "min_return":
                 stop["full_budget"] = objective["full_budget"]
             extras["objective"] = stop
+    if goal is not None:
+        payload["goal"] = {
+            "name": goal.goal,
+            "scoring": [{"min_length": t, "points_per_day": w} for t, w in goal.spec.thresholds],
+            "method": goal.method,
+            "min_vacation_days": goal.min_vacation_days,
+            "max_breaks": goal.max_breaks,
+            "prefer": [d.isoformat() for d in goal.prefer],
+            "tradeoff": [_honest_summary_json(name, rep) for name, rep in goal.comparison],
+        }
+        payload["honest"] = _honest_json(goal.report)
     if curve is not None:
         knee = curve.knee
         payload["curve"] = {
@@ -463,6 +681,59 @@ def render_json(
             "knee": knee.budget if knee is not None else None,
         }
     return json.dumps(payload, indent=2, sort_keys=False)
+
+
+def _honest_summary_json(name: str, rep: HonestReport) -> Dict[str, object]:
+    return {
+        "goal": name,
+        "pto_used": rep.pto_used,
+        "breaks": rep.breaks_count,
+        "total_days": rep.total_days,
+        "longest": rep.longest,
+    }
+
+
+def _honest_json(rep: HonestReport) -> Dict[str, object]:
+    bridge = thanksgiving_bridge(rep)
+    return {
+        "pto_used": rep.pto_used,
+        "holidays_included": rep.holidays_included,
+        "weekend_days_included": rep.weekend_days_included,
+        "total_days": rep.total_days,
+        "breaks_count": rep.breaks_count,
+        "longest": rep.longest,
+        "days_in_selected_years": rep.days_in_years,
+        "days_in_adjacent_years": rep.days_adjacent,
+        "days_by_year": {str(y): n for y, n in rep.days_by_year.items()},
+        "pto_by_year": {str(y): n for y, n in rep.pto_by_year.items()},
+        "budgets": [
+            {"year": r.year, "used": r.used, "granted": r.granted,
+             "remaining": r.remaining, "over": r.over}
+            for r in rep.budget_rows
+        ],
+        "annual_nonworking": {
+            str(y): {"weekend_days": r.weekend_days, "holidays": r.holiday_days, "total": r.total}
+            for y, r in rep.annual.items()
+        },
+        "uncharged_requests": [
+            {"date": d.isoformat(), "reason": why} for d, why in rep.pto_uncharged
+        ],
+        "free_breaks_not_counted": rep.free_breaks_count,
+        "breaks": [
+            {
+                "start": b.start.isoformat(),
+                "end": b.end.isoformat(),
+                "length": b.length,
+                "pto_cost": b.pto_cost,
+                "pto_dates": [d.isoformat() for d in b.pto_dates],
+                "holidays": list(b.holiday_names),
+            }
+            for b in rep.breaks
+        ],
+        "thanksgiving_bridge": (
+            {"pto": bridge.pto, "calendar_days": bridge.days} if bridge is not None else None
+        ),
+    }
 
 
 def _break_json(item: Break) -> Dict[str, object]:

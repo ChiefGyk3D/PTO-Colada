@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
+from .goals import GOALS
 from .conferences import (
     ConferenceOccurrence,
     find_conference,
@@ -69,6 +70,17 @@ class CompanyConfig:
     target_days_off: Optional[int] = None
     blackout: Set[dt.date] = field(default_factory=set)
     committed: Set[dt.date] = field(default_factory=set)
+    #: Goal mode (``weekends``, ``vacations`` or ``balanced``) and its options;
+    #: see :mod:`longweekend.goals`. ``None`` everywhere means the classic planner.
+    goal: Optional[str] = None
+    #: Shortest break that counts as a vacation under the vacation goals.
+    min_vacation_days: Optional[int] = None
+    #: Dates that earn a bonus when taken as PTO.
+    prefer: Set[dt.date] = field(default_factory=set)
+    #: Cap on the number of breaks that contain PTO.
+    max_breaks: Optional[int] = None
+    #: True when ``min_break`` was set by the user rather than left at its default.
+    min_break_explicit: bool = False
     #: Personal days off (religious observances, conferences). These are folded
     #: into ``committed``; kept separately so the report can say what each one
     #: was and what it cost.
@@ -79,6 +91,23 @@ class CompanyConfig:
 
     def holiday_names(self) -> List[str]:
         return [rule.name for rule in self.holidays]
+
+    @property
+    def wants_goal(self) -> bool:
+        """True when any goal-mode option was set, which switches to honest planning."""
+        return bool(
+            self.goal is not None
+            or self.min_vacation_days is not None
+            or self.prefer
+            or self.max_breaks is not None
+        )
+
+    @property
+    def effective_goal(self) -> str:
+        """The goal in force: the one named, else vacations if a vacation length was given."""
+        if self.goal is not None:
+            return self.goal
+        return "vacations" if self.min_vacation_days is not None else "weekends"
 
 
 def parse_date(value: str) -> dt.date:
@@ -203,6 +232,10 @@ def build_config(
     target_days_off: Optional[int] = None,
     blackout: Sequence[str] = (),
     committed: Sequence[str] = (),
+    goal: Optional[str] = None,
+    min_vacation_days: Optional[int] = None,
+    prefer: Sequence[str] = (),
+    max_breaks: Optional[int] = None,
     observe: Sequence[str] = (),
     conferences: Sequence[str] = (),
     conference_file: Optional[str] = None,
@@ -256,8 +289,17 @@ def build_config(
         config.carryover = carryover
     if min_break is not None:
         config.min_break = min_break
+        config.min_break_explicit = True
     if max_consecutive_pto is not None:
         config.max_consecutive_pto = max_consecutive_pto
+    if goal is not None:
+        config.goal = goal
+    if min_vacation_days is not None:
+        config.min_vacation_days = min_vacation_days
+    if prefer:
+        config.prefer |= parse_date_ranges(prefer)
+    if max_breaks is not None:
+        config.max_breaks = max_breaks
     if min_return is not None:
         config.min_return = min_return
     if target_days_off is not None:
@@ -344,6 +386,29 @@ def _validate_numbers(config: CompanyConfig) -> None:
         raise ValueError(
             f"target_days_off must be at least 1 (got {config.target_days_off})"
         )
+    if config.goal is not None and config.goal not in GOALS:
+        raise ValueError(
+            f"goal must be one of {', '.join(GOALS)} (got {config.goal!r})"
+        )
+    if config.min_vacation_days is not None and config.min_vacation_days < 2:
+        raise ValueError(
+            f"min_vacation_days must be at least 2 (got {config.min_vacation_days})"
+        )
+    if config.max_breaks is not None and config.max_breaks < 1:
+        raise ValueError(f"max_breaks must be at least 1 (got {config.max_breaks})")
+    overlap = config.prefer & config.blackout
+    if overlap:
+        raise ValueError(
+            "date(s) are both preferred and blacked out: "
+            + ", ".join(d.isoformat() for d in sorted(overlap))
+        )
+    if config.wants_goal and (
+        config.min_return is not None or config.target_days_off is not None
+    ):
+        raise ValueError(
+            "--goal and its options plan with the honest count; --min-return and "
+            "--target-days-off use the classic planner, so use one or the other"
+        )
     if config.min_return is not None and config.target_days_off is not None:
         raise ValueError(
             "min_return and target_days_off are alternatives: each decides how much "
@@ -418,6 +483,15 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.carryover = int(data["carryover"])  # type: ignore[arg-type]
     if "min_break" in data:
         config.min_break = int(data["min_break"])  # type: ignore[arg-type]
+        config.min_break_explicit = True
+    if "goal" in data:
+        config.goal = str(data["goal"])
+    if "min_vacation_days" in data:
+        config.min_vacation_days = int(data["min_vacation_days"])  # type: ignore[arg-type]
+    if "max_breaks" in data:
+        config.max_breaks = int(data["max_breaks"])  # type: ignore[arg-type]
+    if "prefer" in data:
+        config.prefer |= parse_date_ranges(str(v) for v in _as_list(data["prefer"]))
     if "max_consecutive_pto" in data:
         config.max_consecutive_pto = int(data["max_consecutive_pto"])  # type: ignore[arg-type]
     if "min_return" in data:
