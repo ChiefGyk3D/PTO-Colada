@@ -4,8 +4,9 @@ Reference data
 --------------
 :data:`UMM_AL_QURA` is the Gregorian date of each holiday for 2026-2030 as
 returned by the AlAdhan prayer-times API, endpoint
-``https://api.aladhan.com/v1/hToG/DD-MM-YYYY``, which reports the method
-``HJCoSA`` (the Hijri calendar of Saudi Arabia, i.e. Umm al-Qura). Fetched
+``https://api.aladhan.com/v1/hToG/DD-MM-YYYY``, using its Umm al-Qura
+(UAQ) calendar of Saudi Arabia; the ``HJCoSA`` method name the API reports
+returns the same values. Fetched
 2026-10-29, one request per holiday, 42 values. VERIFIED: the Hijri day of
 each holiday is the convention in :mod:`longweekend.islamic`; the Gregorian
 date is the API's answer.
@@ -174,6 +175,62 @@ class TestTwiceInAGregorianYear:
 
     def test_no_holiday_appears_outside_the_requested_year(self):
         assert all(h.date.year == 2030 for h in islamic.holidays(2030))
+
+
+class TestYearBoundaries:
+    """A holiday can be pushed across 1 January by a shift or an override."""
+
+    def test_shift_pulls_next_years_new_year_into_december(self):
+        # Tabular Islamic New Year 1329 AH is 2 January 1911.
+        found = [h.date for h in islamic.holidays(1910, shift=-3) if h.name == "Islamic New Year"]
+        assert dt.date(1910, 12, 30) in found
+
+    def test_override_pulls_next_years_new_year_into_december(self):
+        found = islamic.holidays(1910, overrides={"Islamic New Year": [dt.date(1910, 12, 31)]})
+        assert (dt.date(1910, 12, 31), True) in [
+            (h.date, h.confirmed) for h in found if h.name == "Islamic New Year"
+        ]
+
+    def test_shift_pushes_last_years_ashura_into_january(self):
+        # Tabular Ashura 1330 AH is 31 December 1911.
+        found = [h.date for h in islamic.holidays(1912, shift=3) if h.name == "Ashura"]
+        assert dt.date(1912, 1, 3) in found
+        # ... and it has left 1911, where it would otherwise be 31 December.
+        assert dt.date(1912, 1, 3) not in [h.date for h in islamic.holidays(1911, shift=3)]
+
+    def test_override_pushes_last_years_ashura_into_january(self):
+        found = islamic.holidays(1912, overrides={"Ashura": [dt.date(1912, 1, 1)]})
+        assert dt.date(1912, 1, 1) in [h.date for h in found if h.name == "Ashura"]
+
+
+class TestOverrideTolerance:
+    FITR = dt.date(2027, 3, 10)  # the tabular date
+
+    @pytest.mark.parametrize("offset", [-3, 3])
+    def test_three_days_either_way_is_accepted(self, offset):
+        date = self.FITR + dt.timedelta(days=offset)
+        days = resolve_observances(["Eid al-Fitr"], [2027], overrides={"Eid al-Fitr": [date]})
+        assert [d.date for d in days] == [date]
+
+    @pytest.mark.parametrize("offset", [-4, 4, -8, 8])
+    def test_four_or_more_days_is_rejected(self, offset):
+        date = self.FITR + dt.timedelta(days=offset)
+        with pytest.raises(ValueError, match=r"is [0-9]+ days from"):
+            resolve_observances(["Eid al-Fitr"], [2027], overrides={"Eid al-Fitr": [date]})
+
+    @pytest.mark.parametrize("offset", [-4, 4, -30, 30])
+    def test_matching_ignores_dates_outside_the_window(self, offset):
+        date = self.FITR + dt.timedelta(days=offset)
+        found = islamic.holidays(2027, overrides={"Eid al-Fitr": [date]})
+        fitr = [h for h in found if h.name == "Eid al-Fitr"]
+        assert [(h.date, h.confirmed) for h in fitr] == [(self.FITR, False)]
+
+    def test_an_override_never_grabs_the_other_occurrence(self):
+        # Ramadan begins on 6 Jan and 26 Dec 2030; a date near one must not
+        # touch the other.
+        found = islamic.holidays(2030, overrides={"Ramadan": [dt.date(2030, 12, 24)]})
+        ramadan = [(h.date, h.confirmed) for h in found if h.name == "First day of Ramadan"]
+        assert ramadan == [(dt.date(2030, 1, 6), False), (dt.date(2030, 12, 24), True)]
 
 
 class TestShift:
@@ -372,6 +429,17 @@ class TestConfigFile:
         with pytest.raises(ValueError, match="between 1 and"):
             build_config(config_path=path, years=[2027])
 
+    @pytest.mark.parametrize("text,message", [
+        ("1899-12-31", "outside the years"),
+        ("1900-01-01", "days from"),
+        ("2200-12-31", "days from"),
+        ("2201-01-01", "outside the years"),
+    ])
+    def test_the_year_range_boundaries(self, tmp_path, text, message):
+        path = write(tmp_path, json.dumps({"observances": {"Eid al-Fitr": text}}))
+        with pytest.raises(ValueError, match=message):
+            build_config(config_path=path, observe=["muslim"], years=[2027])
+
     def test_dates_outside_the_supported_years_are_rejected_even_if_calendar_exact(self, tmp_path):
         old = islamic.to_gregorian(1200, 10, 1).isoformat()
         assert old < "1900"
@@ -454,6 +522,17 @@ class TestThroughTheCli:
     def test_ics_is_provisional(self, capsys):
         out = self.run(capsys, "--pto", "15", "--years", "2", "--observe", "muslim", "--format", "ics")
         assert "X-LWP-PROVISIONAL:TRUE" in out and "moon-sighting" in out
+
+    def test_ics_events_carry_the_caveat_for_muslim_days(self, capsys):
+        out = self.run(capsys, "--pto", "15", "--years", "2", "--observe", "muslim", "--format", "ics")
+        text = out.replace("\r\n ", "")
+        assert "(PROVISIONAL)" in text
+        assert "PROVISIONAL: depends on unconfirmed days (Eid al-Fitr" in text
+        assert "X-LWP-ASSUMPTION:Eid al-Fitr 2027-03-10 moon-sighting" in text
+
+    def test_ics_without_muslim_days_has_no_caveat(self, capsys):
+        out = self.run(capsys, "--pto", "15", "--years", "2", "--observe", "jewish", "--format", "ics")
+        assert "PROVISIONAL" not in out
 
     def test_shift_flag(self, capsys):
         plain = json.loads(

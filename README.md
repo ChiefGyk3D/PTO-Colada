@@ -702,8 +702,9 @@ fall **twice in one Gregorian year**: the first day of Ramadan on 6 January and
 returned and booked. `--erev` and `--israel` apply to Jewish holidays only.
 
 **Verification.** Reference dates: the AlAdhan API
-(`https://api.aladhan.com/v1/hToG/DD-MM-YYYY`, method `HJCoSA`, the Hijri
-calendar of Saudi Arabia, i.e. Umm al-Qura), fetched 2026-10-29, for the eight
+(`https://api.aladhan.com/v1/hToG/DD-MM-YYYY`, its Umm al-Qura (UAQ)
+calendar of Saudi Arabia; the `HJCoSA` method name the API reports returns the
+same values), fetched 2026-10-29, for the eight
 holidays in each of 2026 to 2030; cross-checked against Wikipedia's "Eid
 al-Fitr" article for that holiday. These are verified in
 [`tests/test_islamic.py`](tests/test_islamic.py). Which Hijri day each holiday

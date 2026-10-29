@@ -221,7 +221,7 @@ def _raw_occurrences(year: int) -> List[Tuple[str, int, int, int, dt.date]]:
     first = from_gregorian(dt.date(max(year, 623), 1, 1))[0]
     last = from_gregorian(dt.date(year, 12, 31))[0]
     found = []
-    for hijri_year in range(first - 1, last + 2):
+    for hijri_year in range(first, last + 2):
         for name, month, day in _DEFINITIONS:
             try:
                 found.append((name, hijri_year, month, day, to_gregorian(hijri_year, month, day)))
