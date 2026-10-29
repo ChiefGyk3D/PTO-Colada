@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from dataclasses import dataclass, field
@@ -897,14 +898,21 @@ def _event(
     ]
 
 
+#: Characters that split a line for some parser: every C0 and C1 control
+#: character, DEL, and the Unicode line and paragraph separators.
+_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]|\t")
+_LINE_BREAK = re.compile("\r\n|\r|\n")
+
+
 def _escape(text: str) -> str:
-    return (
-        str(text)
-        .replace("\\", "\\\\")
-        .replace(";", "\\;")
-        .replace(",", "\\,")
-        .replace("\n", "\\n")
-    )
+    """Escape text for an iCalendar value; no input can start a new content line.
+
+    Line breaks of any kind become the two-character ``\\n`` escape; tabs and
+    every other control character become a space.
+    """
+    value = str(text).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+    value = _LINE_BREAK.sub(lambda _match: "\\n", value)
+    return _CONTROL.sub(" ", value)
 
 
 def _fold(line: str) -> str:

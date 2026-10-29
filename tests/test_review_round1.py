@@ -236,3 +236,62 @@ def test_readme_table_matches_the_printed_numbers(capsys, label, extra, numbers)
     h = json.loads(capsys.readouterr().out)["honest"]
     assert (h["breaks_count"], h["total_days"], h["longest"]) == numbers
     assert h["pto_used"] == 17
+
+
+# ----------------------------------------------------------- item 5: ICS injection (#14)
+
+EVIL_NAMES = [
+    "Evil\rBEGIN:VEVENT\rSUMMARY:pwn",
+    "Evil\nBEGIN:VEVENT\nSUMMARY:pwn",
+    "Evil\r\nBEGIN:VEVENT\r\nSUMMARY:pwn",
+    "Evil BEGIN:VEVENT SUMMARY:pwn",
+    "Evil\u0085BEGIN:VEVENT\u0085SUMMARY:pwn",
+    "Evil\x0bBEGIN:VEVENT\x0cSUMMARY:pwn\x00\x1b\x7f\ttab",
+]
+
+
+def _unfold(lines):
+    out = []
+    for line in lines:
+        if line.startswith(" ") and out:
+            out[-1] += line[1:]
+        else:
+            out.append(line)
+    return out
+
+
+def _event_count(ics):
+    counts = []
+    for lines in (ics.split("\r\n"), ics.splitlines()):
+        unfolded = _unfold(lines)
+        counts.append(sum(1 for line in unfolded if line.startswith("BEGIN:VEVENT")))
+        assert not any(line.startswith("SUMMARY:pwn") for line in unfolded)
+        assert not any(line.startswith("BEGIN:VEVENT") and line != "BEGIN:VEVENT" for line in unfolded)
+    return counts
+
+
+@pytest.mark.parametrize("evil", EVIL_NAMES)
+def test_holiday_names_cannot_split_ics_events(tmp_path, capsys, evil):
+    path = write(tmp_path, {"name": evil, "observance": "none", "holidays": [
+        {"name": evil, "date": "2027-03-03", "status": "assumed"},
+        {"name": "Plain", "date": "2027-03-04"}]})
+    ics = cli(capsys, "--config", path, "--start-year", "2027", "--years", "1", "--format", "ics")
+    assert _event_count(ics) == [2, 2]
+    assert "X-LWP-ASSUMPTION:" in ics
+
+
+@pytest.mark.parametrize("evil", EVIL_NAMES)
+def test_goal_mode_ics_with_hostile_names(tmp_path, capsys, evil):
+    path = write(tmp_path, {"observance": "none", "pto_days": 2, "holidays": [
+        {"name": evil, "date": "2027-03-03", "status": "assumed"}]})
+    ics = cli(capsys, "--config", path, "--start-year", "2027", "--years", "1",
+              "--goal", "weekends", "--format", "ics")
+    n = ics.count("\r\nBEGIN:VEVENT")
+    assert _event_count(ics) == [n, n]
+    assert "PROVISIONAL" in ics
+
+
+def test_normal_names_are_escaped_as_before():
+    from longweekend.report import _escape
+    assert _escape("A, B; C\\D\nE") == "A\\, B\; C\\\\D\\nE"
+    assert _escape("Plain Name (observed)") == "Plain Name (observed)"

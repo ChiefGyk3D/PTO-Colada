@@ -454,7 +454,7 @@ so the cap is exact; the output says so. `--min-vacation-days` alone means
 not combine with `--curve`, `--efficiency`, `--min-return`, `--target-days-off`
 or `--style`; they are rejected with a message, since the goal output already
 reports the honest count. A 5-year window with a high `--max-breaks` can take
-tens of seconds.
+several seconds to tens of seconds.
 All of these can also be set in a config file (`goal`, `min_vacation_days`,
 `prefer`, `max_breaks`).
 
