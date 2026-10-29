@@ -60,7 +60,11 @@ class _AliasFinder(importlib.abc.MetaPathFinder):
         if not fullname.startswith(_OLD):
             return None
         new = _NEW + fullname[len(_OLD):]
-        if importlib.util.find_spec(new) is None:
+        real = importlib.util.find_spec(new)
+        # Only real modules/packages: a plain directory (e.g. ``data``) is a
+        # namespace with no origin and must stay unimportable, as it was
+        # before the rename.
+        if real is None or real.origin is None:
             return None
         return importlib.util.spec_from_loader(fullname, _AliasLoader(new))
 
