@@ -13,11 +13,11 @@ import random
 
 import pytest
 
-import longweekend.efficiency as efficiency_module
-from longweekend.catalog import PRESETS, resolve_year
-from longweekend.efficiency import capped_budget, return_curve
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import DayKind, build_days
+import pto_colada.efficiency as efficiency_module
+from pto_colada.catalog import PRESETS, resolve_year
+from pto_colada.efficiency import capped_budget, return_curve
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import DayKind, build_days
 
 
 def oracle(days, budget, min_break, max_consecutive_pto, committed, bonus, max_budget):

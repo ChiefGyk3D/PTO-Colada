@@ -55,8 +55,9 @@ pip install -e .
 ```
 
 That gives you the `pto-colada` command. `long-weekend` still works as an alias
-(PTO Colada was called Long Weekend Planner before the rename). You can also run it without
-installing, either as `python3 -m longweekend.cli` or through the original
+(PTO Colada was called Long Weekend Planner before the rename; the old
+`longweekend` Python package name also still imports, as a compatibility
+shim). You can also run it without installing, either as `python3 -m pto_colada.cli` or through the original
 `python3 holiday.py` entry point, which still accepts its old arguments.
 
 PyYAML is optional, and only needed for `.yaml` company configs:
@@ -393,7 +394,7 @@ $ pto-colada --start-year 2027 --years 1 --min-break 4 --pto 17 --curve
 The first 11 days return 4 days each; the last six return about 2 each, and
 17 PTO days give 56 days in breaks (the "about 55" figure that gets quoted).
 With `--format json` the same rows appear under `curve.points`; in Python, call
-`longweekend.efficiency.return_curve(days, budget, min_break=4)` and use
+`pto_colada.efficiency.return_curve(days, budget, min_break=4)` and use
 `curve.as_dicts()`, `curve.knee` and `curve.points`.
 
 **`--min-return X`** stops spending once extra days would return fewer than
@@ -491,7 +492,7 @@ pto-colada --config examples/employer-2027.yaml --start-year 2027 --years 1
 
 ### How days off are counted
 
-The headline number follows fixed rules (the code is `longweekend/honest.py`,
+The headline number follows fixed rules (the code is `pto_colada/honest.py`,
 plain calendar-date arithmetic, no clocks or time zones):
 
 * A **break** is a maximal run of nonworking days: weekends, holidays and PTO.
@@ -620,7 +621,7 @@ four.
 Jewish holidays are fixed on the Hebrew calendar and wander across the
 Gregorian one, so they are computed rather than tabulated — a table goes stale,
 an algorithm does not. The full rule-based calendar is in
-[`longweekend/hebrew.py`](longweekend/hebrew.py): leap years, the molad, the
+[`pto_colada/hebrew.py`](pto_colada/hebrew.py): leap years, the molad, the
 postponement rules, and conversion in both directions, in the standard library
 alone.
 
@@ -672,7 +673,7 @@ night, so the day booked is the day after the night of the 27th of Ramadan; use
 **These dates are estimates, and the output says so.** Islamic months begin
 when the new moon is sighted, which varies by country and is only known a day
 or so ahead. The planner uses the *tabular* (arithmetic) Islamic calendar in
-[`longweekend/islamic.py`](longweekend/islamic.py): pure standard library, 30
+[`pto_colada/islamic.py`](pto_colada/islamic.py): pure standard library, 30
 year cycle, no tables. Checked against the Umm al-Qura calendar of Saudi Arabia
 for all 42 holiday dates from 2026 to 2030, the tabular date was the same day
 (23 times) or one day later (19 times), never earlier. Published sources also
@@ -743,7 +744,7 @@ bring your own:
 pto-colada --conferences my-cons.json --conference "My Local Con"
 ```
 
-Same format as [the bundled file](longweekend/data/conferences.json); your
+Same format as [the bundled file](pto_colada/data/conferences.json); your
 entries win on a name clash.
 
 If your employer pays for the trip, it is not your leave — use `--blackout` on
@@ -826,7 +827,7 @@ traceback.
 
 ```python
 import datetime as dt
-from longweekend import PRESETS, PtoBudget, build_days, optimize_pto, resolve_year
+from pto_colada import PRESETS, PtoBudget, build_days, optimize_pto, resolve_year
 
 holidays = resolve_year(PRESETS["federal"], 2026)
 days = build_days(dt.date(2026, 1, 1), dt.date(2026, 12, 31), holidays)
@@ -848,7 +849,7 @@ pytest
 Contributions are welcome. If you find a bug or have a suggestion, please open
 an issue or a pull request. New holiday presets for other countries or
 industries are especially useful — add them to `PRESETS` in
-`longweekend/catalog.py` with a test.
+`pto_colada/catalog.py` with a test.
 
 ---
 

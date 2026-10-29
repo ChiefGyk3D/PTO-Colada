@@ -8,11 +8,11 @@ import re
 
 import pytest
 
-from longweekend.catalog import PRESETS, resolve_year
-from longweekend.config import build_config
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.report import _event, _fold, render_ics, render_json, render_text
-from longweekend.schedule import build_days, find_opportunities
+from pto_colada.catalog import PRESETS, resolve_year
+from pto_colada.config import build_config
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.report import _event, _fold, render_ics, render_json, render_text
+from pto_colada.schedule import build_days, find_opportunities
 
 
 @pytest.fixture

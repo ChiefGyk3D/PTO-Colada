@@ -8,17 +8,17 @@ import random
 
 import pytest
 
-from longweekend.catalog import ResolvedHoliday
-from longweekend.goals import (
+from pto_colada.catalog import ResolvedHoliday
+from pto_colada.goals import (
     PREFER_BONUS,
     GoalSpec,
     build_goal_days,
     goal_spec,
     optimize_goal,
 )
-from longweekend.honest import score_pto
-from longweekend.planner import PtoBudget
-from longweekend.schedule import DayKind
+from pto_colada.honest import score_pto
+from pto_colada.planner import PtoBudget
+from pto_colada.schedule import DayKind
 
 D = dt.date
 

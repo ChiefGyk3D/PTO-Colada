@@ -15,7 +15,7 @@ from itertools import combinations
 
 import pytest
 
-from longweekend.catalog import (
+from pto_colada.catalog import (
     KNOWN,
     PRESETS,
     EasterRelative,
@@ -26,9 +26,9 @@ from longweekend.catalog import (
     parse_rule,
     resolve_year,
 )
-from longweekend.config import build_config, rule_from_spec
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import build_days, find_breaks
+from pto_colada.config import build_config, rule_from_spec
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import build_days, find_breaks
 
 FEDERAL = PRESETS["federal"]
 YEAR = 2026
@@ -343,7 +343,7 @@ class TestFloatingHolidays:
 
 class TestFloatingThroughTheCli:
     def test_floating_alone_enables_the_planner(self, capsys):
-        from longweekend.cli import main
+        from pto_colada.cli import main
 
         assert main(["--floating", "3", "--years", "1", "--format", "json"]) == 0
         import json
@@ -353,7 +353,7 @@ class TestFloatingThroughTheCli:
         assert sum(payload["plan"]["floating_used_by_year"].values()) == 3
 
     def test_the_text_report_splits_the_two_pools(self, capsys):
-        from longweekend.cli import main
+        from pto_colada.cli import main
 
         main(["--pto", "10", "--floating", "3", "--years", "1"])
         out = capsys.readouterr().out
@@ -361,7 +361,7 @@ class TestFloatingThroughTheCli:
         assert "PTO, 3 floating" in out
 
     def test_negative_floating_is_rejected(self):
-        from longweekend.cli import main
+        from pto_colada.cli import main
 
         with pytest.raises(SystemExit) as excinfo:
             main(["--floating", "-2", "--years", "1"])

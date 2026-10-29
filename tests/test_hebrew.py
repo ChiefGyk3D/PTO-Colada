@@ -13,7 +13,7 @@ import datetime as dt
 
 import pytest
 
-from longweekend import hebrew
+from pto_colada import hebrew
 
 
 class TestKnownDates:

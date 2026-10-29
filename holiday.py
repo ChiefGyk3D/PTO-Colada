@@ -13,7 +13,7 @@ is reachable through the same command line. Run ``python3 holiday.py --help``
 or install the package and use the ``pto-colada`` command (``long-weekend`` still works).
 """
 
-from longweekend.cli import main
+from pto_colada.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

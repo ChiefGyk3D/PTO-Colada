@@ -8,18 +8,18 @@ from decimal import Decimal
 
 import pytest
 
-from longweekend.catalog import PRESETS, resolve_year
-from longweekend.cli import main
-from longweekend.config import _FILE_KEYS
-from longweekend.horizon import (
+from pto_colada.catalog import PRESETS, resolve_year
+from pto_colada.cli import main
+from pto_colada.config import _FILE_KEYS
+from pto_colada.horizon import (
     add_months,
     build_horizon,
     hours_to_days,
     parse_hours,
     rest_metrics,
 )
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import Day, DayKind, build_days
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import Day, DayKind, build_days
 
 TODAY = "2026-11-02"
 

@@ -70,14 +70,14 @@ class CompanyConfig:
     min_break: int = 4
     max_consecutive_pto: Optional[int] = None
     #: Stop spending once the next PTO day would return fewer than this many
-    #: days in breaks; see :mod:`longweekend.efficiency`.
+    #: days in breaks; see :mod:`pto_colada.efficiency`.
     min_return: Optional[float] = None
     #: Spend the fewest PTO days that reach this many days in breaks.
     target_days_off: Optional[int] = None
     blackout: Set[dt.date] = field(default_factory=set)
     committed: Set[dt.date] = field(default_factory=set)
     #: Goal mode (``weekends``, ``vacations`` or ``balanced``) and its options;
-    #: see :mod:`longweekend.goals`. ``None`` everywhere means the classic planner.
+    #: see :mod:`pto_colada.goals`. ``None`` everywhere means the classic planner.
     goal: Optional[str] = None
     #: Shortest break that counts as a vacation under the vacation goals.
     min_vacation_days: Optional[int] = None

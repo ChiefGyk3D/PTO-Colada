@@ -24,8 +24,8 @@ xlsx = ["openpyxl>=3.1"]
 dev = ["pytest>=7.0", "PyYAML>=5.1", "openpyxl>=3.1"]
 
 [project.scripts]
-pto-colada = "longweekend.cli:main"
-long-weekend = "longweekend.cli:main"   # alias kept so existing installs keep working
+pto-colada = "pto_colada.cli:main"
+long-weekend = "pto_colada.cli:main"   # alias kept so existing installs keep working
 
 [project.urls]
 Homepage = "https://github.com/ChiefGyk3D/PTO-Colada"
@@ -33,12 +33,12 @@ Repository = "https://github.com/ChiefGyk3D/PTO-Colada"
 Issues = "https://github.com/ChiefGyk3D/PTO-Colada/issues"
 
 [tool.setuptools]
-packages = ["longweekend"]
+packages = ["pto_colada", "longweekend"]   # longweekend is the compatibility shim
 
 # The conference catalog is data, not code, so it needs saying explicitly --
 # otherwise it survives an editable install and vanishes from a wheel.
 [tool.setuptools.package-data]
-longweekend = ["data/*.json"]
+pto_colada = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

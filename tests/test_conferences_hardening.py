@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-from longweekend import config
-from longweekend.conferences import load_conferences
+from pto_colada import config
+from pto_colada.conferences import load_conferences
 
 
 def _write(tmp_path, text, name="cons.json"):
@@ -39,7 +39,7 @@ def test_fifo_is_rejected_without_hanging(tmp_path):
     os.mkfifo(fifo)
     code = (
         "import sys\n"
-        "from longweekend.conferences import load_conferences\n"
+        "from pto_colada.conferences import load_conferences\n"
         "try:\n"
         "    load_conferences(sys.argv[1])\n"
         "except ValueError as exc:\n"

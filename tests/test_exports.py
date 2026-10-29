@@ -11,12 +11,12 @@ import sys
 
 import pytest
 
-from longweekend import exports
-from longweekend.cli import main
-from longweekend.config import build_config
-from longweekend.exports import ExportError, neutralize, render_csv, write_exports
-from longweekend.planner import PtoBudget, PtoPlan
-from longweekend.schedule import Break, Day, DayKind
+from pto_colada import exports
+from pto_colada.cli import main
+from pto_colada.config import build_config
+from pto_colada.exports import ExportError, neutralize, render_csv, write_exports
+from pto_colada.planner import PtoBudget, PtoPlan
+from pto_colada.schedule import Break, Day, DayKind
 
 ARGS = ["--start-year", "2026", "--years", "1", "--pto", "10"]
 

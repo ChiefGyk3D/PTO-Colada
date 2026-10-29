@@ -6,8 +6,8 @@ import itertools
 
 import pytest
 
-from longweekend.cli import main
-from longweekend.config import build_config, load_config_file
+from pto_colada.cli import main
+from pto_colada.config import build_config, load_config_file
 
 yaml = pytest.importorskip("yaml")
 
@@ -72,7 +72,7 @@ def test_unexpected_errors_in_the_yaml_constructors_become_clean_errors(tmp_path
 
 
 def test_unexpected_errors_in_the_json_parse_become_clean_errors(tmp_path, monkeypatch):
-    import longweekend.config as config_module
+    import pto_colada.config as config_module
 
     def explode(path):
         def hook(pairs):

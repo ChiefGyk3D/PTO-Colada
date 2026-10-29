@@ -7,9 +7,9 @@ import itertools
 
 import pytest
 
-from longweekend.catalog import PRESETS, FixedDate, parse_workweek, resolve_year
-from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import DayKind, build_days, find_breaks, find_opportunities
+from pto_colada.catalog import PRESETS, FixedDate, parse_workweek, resolve_year
+from pto_colada.planner import PtoBudget, optimize_pto
+from pto_colada.schedule import DayKind, build_days, find_breaks, find_opportunities
 
 
 def make_days(start, end, rules=(), workweek=None, blackout=None):

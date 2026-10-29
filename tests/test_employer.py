@@ -8,9 +8,9 @@ import os
 
 import pytest
 
-from longweekend.catalog import Observance, resolve_year
-from longweekend.cli import main
-from longweekend.config import build_config
+from pto_colada.catalog import Observance, resolve_year
+from pto_colada.cli import main
+from pto_colada.config import build_config
 
 D = dt.date
 HERE = os.path.dirname(__file__)
