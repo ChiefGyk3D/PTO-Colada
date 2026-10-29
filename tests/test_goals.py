@@ -259,3 +259,21 @@ class TestExactness:
         )
         expected = self.brute(days, (start, end), budget, spec, prefer, max_breaks)
         assert (result.score, -len(result.pto_dates)) == expected
+
+
+class TestDocumentedNumbers:
+    """The README quotes these; they come from the exact DP on the example config."""
+
+    @pytest.mark.parametrize(
+        "goal,breaks,days,longest",
+        [("weekends", 17, 59, 5), ("vacations", 4, 39, 12), ("balanced", 6, 45, 10)],
+    )
+    def test_seventeen_pto_numbers(self, results, goal, breaks, days, longest):
+        report = honest(results[goal])
+        assert (report.pto_used, report.breaks_count, report.total_days, report.longest) == (
+            17, breaks, days, longest
+        )
+
+    def test_weekends_with_fourteen_breaks(self):
+        report = honest(run_goal("weekends", max_breaks=14))
+        assert (report.breaks_count, report.total_days, report.longest) == (14, 55, 10)

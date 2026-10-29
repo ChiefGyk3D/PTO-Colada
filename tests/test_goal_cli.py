@@ -179,3 +179,53 @@ class TestErrors:
         config = build_config(config_path=str(path))
         assert (config.goal, config.min_vacation_days, config.max_breaks) == ("vacations", 6, 2)
         assert D(2027, 3, 1) in config.prefer
+
+
+class TestValidationCasesThroughTheCli:
+    """Cases A and B are given PTO sets, committed in full so the planner has no choice."""
+
+    @staticmethod
+    def commits(dates):
+        out = []
+        for date in dates:
+            out += ["--commit", date]
+        return out
+
+    def test_case_a(self, capsys):
+        dates = ["2027-01-04", "2027-05-28", "2027-07-02", "2027-09-03", "2027-11-24",
+                 "2027-12-27:2027-12-30", "2027-02-05", "2027-03-05", "2027-04-09",
+                 "2027-05-07", "2027-06-04", "2027-08-06", "2027-10-01", "2027-11-05"]
+        h = run_json(capsys, "--goal", "weekends", *self.commits(dates))["honest"]
+        assert (h["pto_used"], h["breaks_count"], h["total_days"]) == (17, 14, 55)
+        assert (h["holidays_included"], h["weekend_days_included"]) == (8, 30)
+        assert (h["days_in_selected_years"], h["days_in_adjacent_years"], h["longest"]) == (53, 2, 10)
+        assert [b["length"] for b in h["breaks"]] == [4, 3, 3, 3, 3, 4, 3, 4, 3, 4, 3, 3, 5, 10]
+
+    def test_case_b(self, capsys):
+        dates = ["2027-01-04", "2027-06-01:2027-06-04", "2027-07-06:2027-07-09", "2027-09-03",
+                 "2027-11-22:2027-11-24", "2027-12-27:2027-12-30"]
+        data = run_json(capsys, "--goal", "balanced", *self.commits(dates))
+        h = data["honest"]
+        assert (h["pto_used"], h["breaks_count"], h["total_days"]) == (17, 6, 45)
+        assert (h["holidays_included"], h["weekend_days_included"]) == (8, 20)
+        assert (h["days_in_selected_years"], h["days_in_adjacent_years"], h["longest"]) == (43, 2, 10)
+        assert [b["length"] for b in h["breaks"]] == [4, 9, 9, 4, 9, 10]
+        assert h["thanksgiving_bridge"] == {"pto": 7, "calendar_days": 19}
+
+
+class TestObservedShiftsThroughTheCli:
+    def test_saturday_holiday_is_observed_on_friday_and_costs_nothing(self, tmp_path, capsys):
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps({
+            "pto_days": 1, "holidays": [{"name": "July Fourth", "month": 7, "day": 4}],
+        }))
+        argv = ["--config", str(path), "--start-year", "2026", "--years", "1", "--pto", "1",
+                "--goal", "weekends", "--commit", "2026-07-03", "--format", "json"]
+        assert main(argv) == 0
+        data = json.loads(capsys.readouterr().out)
+        h = data["honest"]
+        # 2026-07-04 is a Saturday: observed Friday Jul 3, so the "PTO" there is free
+        # and the one real day of leave is spent elsewhere.
+        assert "2026-07-03" not in data["plan"]["pto_dates"]
+        assert h["pto_used"] == 1
+        assert h["uncharged_requests"] == [{"date": "2026-07-03", "reason": "holiday"}]

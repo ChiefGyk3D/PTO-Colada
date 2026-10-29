@@ -372,6 +372,129 @@ nine-day ones. Raising `--min-break` is the blunter version of the same idea:
 `--blackout` and `--commit` are repeatable and accept single dates or
 `START:END` ranges.
 
+## Employer calendars, honest counting and goals
+
+Three things for planning against one employer's real calendar.
+
+### An employer's paid days, with a confirmation status
+
+List the paid days as explicit dates and say how sure you are of each. See
+[`examples/employer-2027.yaml`](examples/employer-2027.yaml) (and the JSON twin
+[`examples/employer-2027.json`](examples/employer-2027.json)):
+
+```yaml
+observance: none      # these are already the observed dates; do not shift them
+holidays:
+  - {name: "Memorial Day",                date: 2027-05-31, status: assumed}
+  - {name: "Independence Day (observed)", date: 2027-07-05, status: observed-unconfirmed}
+  - {name: "Thanksgiving",                date: 2027-11-25, status: confirmed}
+```
+
+`status` is `confirmed`, `assumed` (believed to be paid, not confirmed) or
+`observed-unconfirmed` (the holiday is paid; the observed date is a guess). It
+works on entries with an explicit `date`. The example has exactly eight days
+and nothing else is added: no MLK, Presidents, Juneteenth, Columbus, Veterans,
+Good Friday, Christmas Eve or extra New Year's Eve. Turn extras on by hand with
+`--add`, or add floating days with `--floating`. Two holidays on one date count
+once.
+
+If any day in the window is not confirmed, the result is labeled
+**PROVISIONAL** in text, JSON (`"provisional": true` plus `"assumptions"`) and
+`.ics` (`X-LWP-PROVISIONAL`, and in each PTO, break and holiday description),
+and the unconfirmed days are listed.
+
+```
+long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1
+```
+
+### How days off are counted
+
+The headline number follows fixed rules (the code is `longweekend/honest.py`,
+plain calendar-date arithmetic, no clocks or time zones):
+
+* A **break** is a maximal run of nonworking days: weekends, holidays and PTO.
+  Breaks that touch or overlap merge.
+* The **featured total** counts only breaks that contain at least one PTO day,
+  each calendar date once. A holiday weekend that costs nothing is reported
+  separately, never added to the headline.
+* PTO is charged only on a scheduled workday that is not a holiday. A holiday
+  that lands on a weekend costs nothing and is counted once, as a weekend day.
+* The window reaches past the selected year, so a break crossing December 31
+  is whole (Dec 24, 2027 to Jan 2, 2028 is one 10-day break).
+* Budgets are per calendar year: PTO is charged to the year it is taken.
+* The report gives PTO used, holidays, weekend days, number of breaks, longest
+  break, days inside the selected year versus adjacent years, and all annual
+  nonworking days separately.
+
+### Goals
+
+Pass any of these and the planner scores by the rules above instead of the
+classic days-in-breaks score. They need a PTO budget.
+
+```
+long-weekend --config examples/employer-2027.yaml --goal weekends
+long-weekend --config examples/employer-2027.yaml --goal vacations --min-vacation-days 9
+long-weekend --config examples/employer-2027.yaml --goal balanced --max-breaks 8
+long-weekend --config examples/employer-2027.yaml --goal weekends --prefer 2027-08-13 --blackout 2027-03-01:2027-03-12
+```
+
+| Goal | What a PTO break of `L` days is worth |
+| --- | --- |
+| `weekends` | `L` if `L >= 3` (override the 3 with `--min-break`) |
+| `vacations` | `L` if `L >= V`, else 0 (`V` is `--min-vacation-days`, default 7) |
+| `balanced` | `L` if `L >= 3`, plus another `L` if `L >= V`: a vacation day counts double |
+
+A plan's score is the sum over its breaks. `--prefer DATE[:DATE]` adds 2 points
+for each preferred date taken as PTO (enough to break ties and tip close calls,
+not to buy a day that does nothing). `--blackout` works as before.
+`--max-breaks N` caps the number of breaks that contain PTO. The search is the
+same exact dynamic program as the classic planner with a break counter added,
+so the cap is exact; the output says so. `--min-vacation-days` alone means
+`--goal vacations`; the other options alone mean `--goal weekends`. Goals do
+not combine with `--curve`, `--min-return`, `--target-days-off` or `--style`.
+All of these can also be set in a config file (`goal`, `min_vacation_days`,
+`prefer`, `max_breaks`).
+
+Every goal run also plans the other two goals under the same constraints and
+prints a **Tradeoff** table. The largest total is not marked as best: many
+short breaks and a few long ones can cost the same PTO and give different
+totals and a different kind of rest.
+
+On the example employer file with 17 PTO (the numbers move if an unconfirmed
+day moves):
+
+| Goal | Breaks | Days off | Longest |
+| --- | ---: | ---: | ---: |
+| `weekends` | 17 | 59 | 5 |
+| `weekends --max-breaks 14` | 14 | 55 | 10 |
+| `balanced` | 6 | 45 | 10 |
+| `vacations` | 4 | 39 | 12 |
+
+### Validation cases
+
+Two PTO sets are scored by the counting function as exact tests. They are
+**validation cases, not proven optima**: the planner is not required to
+reproduce them, and `--goal weekends` finds a plan with more days than A.
+
+* **A**, 17 PTO: Jan 4, May 28, Jul 2, Sep 3, Nov 24, Dec 27-30, and Fridays
+  Feb 5, Mar 5, Apr 9, May 7, Jun 4, Aug 6, Oct 1, Nov 5 (2027). 14 breaks, 55
+  days = 17 PTO + 8 holidays + 30 weekend days; 53 in 2027, 2 in 2028; longest
+  10. Break lengths 4, 3, 3, 3, 3, 4, 3, 4, 3, 4, 3, 3, 5, 10.
+* **B**, 17 PTO: Jan 4, Jun 1-4, Jul 6-9, Sep 3, Nov 22-24, Dec 27-30. 6 breaks
+  (4, 9, 9, 4, 9, 10), 45 days = 17 + 8 + 20; 43 in 2027, 2 in 2028; longest 10.
+* **Bridge**: Nov 22-24 together with Dec 27-30 is 7 PTO for two breaks of 19
+  calendar days in total. The report calls this out whenever a plan has it.
+
+To score your own set of dates, commit them in full and let the planner have
+no choice: `--goal weekends --commit 2027-01-04 --commit 2027-12-27:2027-12-30`.
+
+### Assumptions awaiting confirmation
+
+* Memorial Day (May 31) and Labor Day (Sep 6) are assumed paid days.
+* The three observed dates are unconfirmed: Independence Day on Jul 5,
+  Christmas on Dec 24, New Year's 2028 on Dec 31.
+* 17 PTO days is only an example budget.
+
 ## Days you take off yourself
 
 Company holidays are free: the office is shut and your balance is untouched.
