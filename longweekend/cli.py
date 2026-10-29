@@ -405,6 +405,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (ValueError, FileNotFoundError, OverflowError) as exc:
         parser.error(str(exc))
         return 2  # pragma: no cover - parser.error exits
+    except MemoryError:
+        parser.error("not enough memory to read this configuration")
+        return 2  # pragma: no cover - parser.error exits
 
     if not config.holidays:
         print("No holidays configured; nothing to plan.", file=sys.stderr)

@@ -123,9 +123,31 @@ def parse_date(value: str) -> dt.date:
         raise ValueError(f"expected a YYYY-MM-DD date, got {value!r}") from None
 
 
-def parse_date_ranges(values: Iterable[str]) -> Set[dt.date]:
-    """Expand ``YYYY-MM-DD`` and ``YYYY-MM-DD:YYYY-MM-DD`` specs into a date set."""
+#: Longest single date range accepted, in days (ten years).
+MAX_RANGE_DAYS = 3660
+#: Most days all the ranges of one option may declare together.
+MAX_RANGE_TOTAL_DAYS = 20000
+_MIN_YEAR, _MAX_YEAR = 1900, 2200
+
+
+def _bounded_date(text: str, option: str) -> dt.date:
+    date = parse_date(text)
+    if not _MIN_YEAR <= date.year <= _MAX_YEAR:
+        raise ValueError(
+            f"{option}: {text.strip()} is outside the years {_MIN_YEAR} to {_MAX_YEAR}"
+        )
+    return date
+
+
+def parse_date_ranges(values: Iterable[str], option: str = "date range") -> Set[dt.date]:
+    """Expand ``YYYY-MM-DD`` and ``YYYY-MM-DD:YYYY-MM-DD`` specs into a date set.
+
+    ``option`` names the flag or key for error messages. Ranges are checked
+    before they are expanded: one range may span at most :data:`MAX_RANGE_DAYS`
+    days and all the ranges together at most :data:`MAX_RANGE_TOTAL_DAYS`.
+    """
     dates: Set[dt.date] = set()
+    declared = 0
     for value in values:
         for chunk in str(value).split(","):
             chunk = chunk.strip()
@@ -133,15 +155,31 @@ def parse_date_ranges(values: Iterable[str]) -> Set[dt.date]:
                 continue
             if ":" in chunk:
                 start_text, _, end_text = chunk.partition(":")
-                start, end = parse_date(start_text), parse_date(end_text)
+                start, end = _bounded_date(start_text, option), _bounded_date(end_text, option)
                 if end < start:
-                    raise ValueError(f"date range {chunk!r} ends before it starts")
+                    raise ValueError(f"{option}: date range {chunk!r} ends before it starts")
+                size = (end - start).days + 1
+                if size > MAX_RANGE_DAYS:
+                    raise ValueError(
+                        f"{option}: date range {chunk!r} is longer than {MAX_RANGE_DAYS} days"
+                    )
+                declared += size
+                if declared > MAX_RANGE_TOTAL_DAYS:
+                    raise ValueError(
+                        f"{option}: the ranges together cover more than "
+                        f"{MAX_RANGE_TOTAL_DAYS} days in total"
+                    )
                 current = start
                 while current <= end:
                     dates.add(current)
                     current += dt.timedelta(days=1)
             else:
-                dates.add(parse_date(chunk))
+                declared += 1
+                if declared > MAX_RANGE_TOTAL_DAYS:
+                    raise ValueError(
+                        f"{option}: more than {MAX_RANGE_TOTAL_DAYS} days in total"
+                    )
+                dates.add(_bounded_date(chunk, option))
     return dates
 
 
@@ -459,6 +497,7 @@ def load_config_file(path: str) -> Dict[str, object]:
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a mapping at the top level")
     _check_depth(data, path)
+    _check_text(data, path)
     return data
 
 
@@ -545,7 +584,7 @@ def build_config(
     if min_vacation_days is not None:
         config.min_vacation_days = min_vacation_days
     if prefer:
-        config.prefer |= parse_date_ranges(prefer)
+        config.prefer |= parse_date_ranges(prefer, "prefer")
     if max_breaks is not None:
         config.max_breaks = max_breaks
     if min_return is not None:
@@ -553,9 +592,9 @@ def build_config(
     if target_days_off is not None:
         config.target_days_off = target_days_off
     if blackout:
-        config.blackout |= parse_date_ranges(blackout)
+        config.blackout |= parse_date_ranges(blackout, "blackout")
     if committed:
-        config.committed |= parse_date_ranges(committed)
+        config.committed |= parse_date_ranges(committed, "commit")
 
     if conference_travel:
         config.conference_travel = conference_travel
@@ -671,10 +710,11 @@ def _default_years() -> List[int]:
 
 
 def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> None:
-    config.name = str(data.get("name", config.name))
+    if "name" in data:
+        config.name = _text(data["name"], "name", path)
 
     if "preset" in data:
-        base = str(data["preset"])
+        base = _text(data["preset"], "preset", path)
         if base not in PRESETS:
             raise ValueError(
                 f"{path}: unknown preset {base!r}; choose one of: {', '.join(sorted(PRESETS))}"
@@ -696,23 +736,22 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         # 'holidays' replaces the preset; use 'add'/'drop' to amend one instead.
         config.holidays = rules
 
-    for spec in _as_list(data.get("add")):
-        config.holidays.append(
-            rule_from_spec(str(spec)) if isinstance(spec, str) else rule_from_mapping(spec)
-        )
-    dropped = {_key(str(name)) for name in _as_list(data.get("drop"))}
+    if "add" in data:
+        for position, spec in enumerate(_entries(data["add"], "add", path), start=1):
+            try:
+                config.holidays.append(
+                    rule_from_spec(spec) if isinstance(spec, str) else rule_from_mapping(spec)
+                )
+            except ValueError as exc:
+                raise ValueError(f"{path}: 'add' entry {position}: {exc}") from None
+    dropped = {_key(name) for name in _text_list(data.get("drop"), "drop", path)} if "drop" in data else set()
     if dropped:
         config.holidays = [r for r in config.holidays if _key(r.name) not in dropped]
 
     if "workweek" in data:
-        value = data["workweek"]
-        config.workweek = (
-            parse_workweek(",".join(str(v) for v in value))
-            if isinstance(value, list)
-            else parse_workweek(str(value))
-        )
+        config.workweek = parse_workweek(",".join(_text_list(data["workweek"], "workweek", path)))
     if "observance" in data:
-        config.observance = Observance.parse(str(data["observance"]))
+        config.observance = Observance.parse(_text(data["observance"], "observance", path))
     if "pto_days" in data:
         config.pto_days = _file_int(data["pto_days"], "pto_days", path)
     if "pto_by_year" in data:
@@ -729,15 +768,13 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.min_break = _file_int(data["min_break"], "min_break", path)
         config.min_break_explicit = True
     if "goal" in data:
-        if not isinstance(data["goal"], str):
-            raise ValueError(f"{path}: 'goal' must be text, one of {', '.join(GOALS)} (got {data['goal']!r})")
-        config.goal = data["goal"]
+        config.goal = _text(data["goal"], "goal", path)
     if "min_vacation_days" in data:
         config.min_vacation_days = _file_int(data["min_vacation_days"], "min_vacation_days", path)
     if "max_breaks" in data:
         config.max_breaks = _file_int(data["max_breaks"], "max_breaks", path)
     if "prefer" in data:
-        config.prefer |= parse_date_ranges(str(v) for v in _as_list(data["prefer"]))
+        config.prefer |= parse_date_ranges(_text_list(data["prefer"], "prefer", path), "prefer")
     if "max_consecutive_pto" in data:
         config.max_consecutive_pto = _file_int(data["max_consecutive_pto"], "max_consecutive_pto", path)
     if "min_return" in data:
@@ -747,9 +784,69 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
     if "conference_travel" in data:
         config.conference_travel = _file_int(data["conference_travel"], "conference_travel", path)
     if "blackout" in data:
-        config.blackout |= parse_date_ranges(str(v) for v in _as_list(data["blackout"]))
+        config.blackout |= parse_date_ranges(_text_list(data["blackout"], "blackout", path), "blackout")
     if "committed" in data:
-        config.committed |= parse_date_ranges(str(v) for v in _as_list(data["committed"]))
+        config.committed |= parse_date_ranges(_text_list(data["committed"], "committed", path), "committed")
+
+
+def _text(value: object, key: str, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path}: {key!r} must be text (got {value!r})")
+    return value
+
+
+def _text_list(value: object, key: str, path: str) -> List[str]:
+    """A string or a list of strings; anything else is an error naming the entry."""
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        raise ValueError(f"{path}: {key!r} must be text or a list of text (got {value!r})")
+    for position, item in enumerate(value, start=1):
+        if not isinstance(item, str):
+            raise ValueError(f"{path}: {key!r} entry {position} must be text (got {item!r})")
+    return list(value)
+
+
+def _entries(value: object, key: str, path: str) -> List[object]:
+    """Holiday entries: a string or mapping, or a list of them."""
+    items = value if isinstance(value, list) else [value]
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, (str, dict)):
+            raise ValueError(
+                f"{path}: {key!r} entry {position} must be text or a mapping (got {item!r})"
+            )
+    return list(items)
+
+
+def _check_text(data: object, path: str) -> None:
+    """Reject strings that cannot be written out as UTF-8 (lone surrogates)."""
+    stack = [(data, "the top level")]
+    while stack:
+        item, where = stack.pop()
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError(
+                    f"{path}: text at {where} is not valid UTF-8 (a lone surrogate character)"
+                ) from None
+        elif isinstance(item, dict):
+            for key, value in item.items():
+                if isinstance(key, str):
+                    try:
+                        key.encode("utf-8")
+                    except UnicodeEncodeError:
+                        raise ValueError(
+                            f"{path}: a key under {where} is not valid UTF-8 "
+                            "(a lone surrogate character)"
+                        ) from None
+                    label = f"{where}.{key}" if where != "the top level" else key
+                else:
+                    label = f"{where}.{key!r}"
+                stack.append((value, label))
+        elif isinstance(item, list):
+            for position, value in enumerate(item):
+                stack.append((value, f"{where}[{position}]"))
 
 
 def _file_number(value: object, key: str, path: str) -> float:

@@ -212,7 +212,10 @@ of nesting. They must be regular files. Duplicate keys, YAML aliases (`&x`,
 different spellings (`"2027"` and `2027`). Numbers are written in plain decimal
 (`17`, not `010`, `0x11` or `1:20`); text, fractions, infinity and huge values
 are rejected with a message naming the key.
-Config errors may quote the value you wrote and the file's path; do not paste
+Date lists (`--blackout`, `--commit`, `--prefer` and the matching file keys) take
+years 1900 to 2200, ranges of at most 3,660 days, and at most 20,000 days per
+option. A key set to null, or to the wrong kind of value, is an error; delete the
+key instead. Config errors may quote the value you wrote and the file's path; do not paste
 them into public places if the file holds private data.
 
 ```
