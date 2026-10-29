@@ -585,6 +585,7 @@ def render_json(
     curve: Optional[ReturnCurve] = None,
     objective: Optional[Dict[str, Any]] = None,
     goal: Optional[GoalSummary] = None,
+    horizon: Optional[Dict[str, object]] = None,
 ) -> str:
     payload: Dict[str, object] = {
         "config": {
@@ -701,6 +702,8 @@ def render_json(
             "points": curve.as_dicts(),
             "knee": knee.budget if knee is not None else None,
         }
+    if horizon is not None:
+        payload["horizon"] = horizon
     return json.dumps(payload, indent=2, sort_keys=False)
 
 

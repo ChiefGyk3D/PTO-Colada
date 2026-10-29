@@ -36,7 +36,12 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from .schedule import Break, Day, DayKind, find_breaks
 
-__all__ = ["PtoPlan", "PtoBudget", "optimize_pto"]
+__all__ = ["PtoPlan", "PtoBudget", "REST_BREAK_DAYS", "optimize_pto"]
+
+#: Consecutive days off that count as a rest break for ``max_work_streak``: a
+#: long weekend. A plain two-day weekend is not enough, or the limit could
+#: never bind on a Monday to Friday week.
+REST_BREAK_DAYS = 3
 
 
 @dataclass
@@ -118,8 +123,11 @@ class PtoPlan:
         return self.granted_total(year) - self.spent_by_year.get(year, 0)
 
 
-# State: (pto_remaining_this_year, capped_run_length, capped_pto_run_length)
-_State = Tuple[int, int, int]
+# State: (pto_remaining_this_year, capped_run_length, capped_pto_run_length,
+#         (working days since the last rest break, current days-off run capped at
+#         REST_BREAK_DAYS)). The last part is always (0, 0) unless max_work_streak is set,
+# so the search space is unchanged by default.
+_State = Tuple[int, int, int, Tuple[int, int]]
 
 
 def optimize_pto(
@@ -129,12 +137,18 @@ def optimize_pto(
     max_consecutive_pto: Optional[int] = None,
     committed: Optional[Set[dt.date]] = None,
     long_break_bonus: int = 0,
+    max_work_streak: Optional[int] = None,
 ) -> PtoPlan:
     """Return a copy of ``days`` with the best PTO days marked.
 
     ``committed`` dates are treated as already booked: they are always taken
     and always charged to the budget. ``long_break_bonus`` trades many short
     breaks for fewer long ones; see the module docstring.
+
+    ``max_work_streak`` forbids more than that many working days between rest
+    breaks (:data:`REST_BREAK_DAYS` or more days off in a row, holidays and
+    weekends included). The count starts on the first day given. The search
+    stays exact; it raises ``ValueError`` when no plan can honor the limit.
     """
     if min_break < 1:
         raise ValueError("min_break must be at least 1")
@@ -142,6 +156,8 @@ def optimize_pto(
         raise ValueError("long_break_bonus cannot be negative")
     if max_consecutive_pto is not None and max_consecutive_pto < 1:
         raise ValueError("max_consecutive_pto must be at least 1")
+    if max_work_streak is not None and max_work_streak < 1:
+        raise ValueError("max_work_streak must be at least 1")
     committed = committed or set()
 
     plan_days = [Day(d.date, d.kind, d.holiday, d.blackout) for d in days]
@@ -157,7 +173,7 @@ def optimize_pto(
     first_year = plan_days[0].date.year
     granted[first_year] = budget.for_year(first_year)
     floating[first_year] = budget.floating_for_year(first_year)
-    start_state: _State = (budget.total_for_year(first_year), 0, 0)
+    start_state: _State = (budget.total_for_year(first_year), 0, 0, (0, 0))
     # value: (score, pto_spent) -- ranked by score, then by spending less.
     frontier: Dict[_State, Tuple[int, int]] = {start_state: (0, 0)}
     trace: List[Dict[_State, Tuple[_State, bool]]] = []
@@ -182,8 +198,16 @@ def optimize_pto(
 
         frontier, step = _advance(
             frontier, day, min_break, pto_run_cap, day.date in committed,
-            regrant, rollover_cap, long_break_bonus,
+            regrant, rollover_cap, long_break_bonus, max_work_streak,
         )
+        if not frontier and max_work_streak is not None:
+            raise ValueError(
+                f"--max-work-streak {max_work_streak} cannot be met: by "
+                f"{day.date.isoformat()} no plan keeps every stretch of working days "
+                f"within {max_work_streak} while fitting the PTO budget, blackout dates "
+                "and commitments. Raise the PTO balance or the refill, allow a longer "
+                "streak, or shorten the blackout periods."
+            )
         if not frontier:
             raise ValueError(
                 f"no feasible PTO plan at {day.date.isoformat()}: committed dates conflict "
@@ -214,6 +238,7 @@ def _advance(
     regrant: Optional[int] = None,
     rollover_cap: int = 0,
     long_break_bonus: int = 0,
+    max_work_streak: Optional[int] = None,
 ) -> Tuple[Dict[_State, Tuple[int, int]], Dict[_State, Tuple[_State, bool]]]:
     """Expand every state across a single day.
 
@@ -232,13 +257,15 @@ def _advance(
             step[state] = (came_from, took_pto)
 
     for state, (score, spent) in frontier.items():
-        remaining, run, pto_run = state
+        remaining, run, pto_run, rest = state
         if regrant is not None:
             remaining = regrant + min(remaining, rollover_cap)
+        off_rest = _rest_off(rest, max_work_streak)
+        work_rest = _rest_work(rest, max_work_streak)
 
         if day.is_off:  # already a holiday or a non-working day
             new_run, gain = _extend(run, min_break, long_break_bonus)
-            offer((remaining, new_run, 0), (score + gain, spent), state, False)
+            offer((remaining, new_run, 0, off_rest), (score + gain, spent), state, False)
             continue
 
         can_take = (
@@ -252,25 +279,43 @@ def _advance(
                 new_run, gain = _extend(run, min_break, long_break_bonus)
                 new_pto_run = min(pto_run + 1, pto_run_cap) if pto_run_cap else 0
                 offer(
-                    (remaining - 1, new_run, new_pto_run),
+                    (remaining - 1, new_run, new_pto_run, off_rest),
                     (score + gain, spent + 1),
                     state,
                     True,
                 )
             continue
 
-        offer((remaining, 0, 0), (score, spent), state, False)  # work the day
+        if work_rest is not None:
+            offer((remaining, 0, 0, work_rest), (score, spent), state, False)  # work the day
         if can_take:
             new_run, gain = _extend(run, min_break, long_break_bonus)
             new_pto_run = min(pto_run + 1, pto_run_cap) if pto_run_cap else 0
             offer(
-                (remaining - 1, new_run, new_pto_run),
+                (remaining - 1, new_run, new_pto_run, off_rest),
                 (score + gain, spent + 1),
                 state,
                 True,
             )
 
     return next_frontier, step
+
+
+def _rest_off(rest: Tuple[int, int], limit: Optional[int]) -> Tuple[int, int]:
+    """Rest state after a day off: the third day in a row is a break and resets the count."""
+    if limit is None:
+        return rest
+    streak, off = rest
+    off = min(off + 1, REST_BREAK_DAYS)
+    return (0, off) if off >= REST_BREAK_DAYS else (streak, off)
+
+
+def _rest_work(rest: Tuple[int, int], limit: Optional[int]) -> Optional[Tuple[int, int]]:
+    """Rest state after a working day, or ``None`` when that day would break the limit."""
+    if limit is None:
+        return rest
+    streak = rest[0] + 1
+    return None if streak > limit else (streak, 0)
 
 
 def _extend(run: int, min_break: int, long_break_bonus: int = 0) -> Tuple[int, int]:

@@ -5,15 +5,24 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import sys
+from dataclasses import replace
 from typing import Dict, List, Optional, Sequence
 
 from .catalog import KNOWN, PRESETS, ResolvedHoliday, resolve_year
 from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
-from .config import CompanyConfig, build_config
+from .config import CompanyConfig, _bounded_date, build_config
 from .efficiency import ReturnCurve, return_curve
 from .goals import GOALS, PAD_DAYS, build_goal_days, goal_spec, optimize_goal
 from .honest import score_pto
+from .horizon import (
+    HorizonSpec,
+    build_horizon,
+    describe_horizon,
+    horizon_json,
+    rest_metrics,
+    year_ends,
+)
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import GoalSummary, render_ics, render_json, render_text
 from .schedule import Break, Day, Opportunity, build_days, find_opportunities
@@ -45,6 +54,8 @@ examples:
   long-weekend --config examples/employer-2027.yaml --start-year 2027 --years 1 --goal balanced --max-breaks 8
                                                 honest count, one goal, at most 8 breaks
   long-weekend --pto 15 --goal vacations --min-vacation-days 9 --prefer 2026-12-24:2026-12-31
+  long-weekend --today 2026-11-02 --pto-hours 36 --refill-hours 120 --carryover 5 --through 2027-03-31
+                                                plan from a date, in hours, across the new year
 """
 
 
@@ -75,6 +86,51 @@ def build_parser() -> argparse.ArgumentParser:
     window.add_argument(
         "--from-today", action="store_true",
         help="start the window at today instead of January 1, so past days are not planned",
+    )
+
+    horizon = parser.add_argument_group(
+        "planning from today, in hours (any option here, except --today and "
+        "--hours-per-day, starts this mode; it needs --pto-hours)"
+    )
+    horizon.add_argument(
+        "--pto-hours", metavar="H",
+        help=(
+            "your PTO balance now, in hours. Whole days (hours / --hours-per-day, rounded "
+            "down) are planned; the leftover hours are reported. Plans from today; "
+            "--start-year, --end-year and --from-today do not apply and --years is ignored"
+        ),
+    )
+    horizon.add_argument(
+        "--hours-per-day", metavar="H", default="8",
+        help="hours in one workday, for converting hours to days (default: 8)",
+    )
+    horizon.add_argument(
+        "--refill-hours", metavar="H",
+        help=(
+            "hours granted on each January 1 inside the horizon (default: none). Unspent "
+            "days roll over up to --carryover (in days); the rest is reported as "
+            "use-it-or-lose-it"
+        ),
+    )
+    horizon.add_argument(
+        "--today", metavar="DATE",
+        help="treat DATE (YYYY-MM-DD) as today, so examples are reproducible (default: the real date)",
+    )
+    horizon.add_argument(
+        "--through", metavar="DATE",
+        help="last day to plan (default: December 31 of today's year)",
+    )
+    horizon.add_argument(
+        "--months", type=int, metavar="N",
+        help="plan N months from today instead of using --through (1 to 60)",
+    )
+    horizon.add_argument(
+        "--max-work-streak", type=int, metavar="N",
+        help=(
+            "never go more than N working days without a rest break (3+ days off in a row, "
+            "holidays and weekends included). The count starts on the first planned day. "
+            "Classic planner only; an error says so when no plan can keep the limit"
+        ),
     )
 
     holidays = parser.add_argument_group("which holidays your employer observes")
@@ -349,7 +405,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(describe_sets())
         return 0
 
-    today = dt.date.today()
+    try:
+        today = _bounded_date(args.today, "--today") if args.today else dt.date.today()
+    except ValueError as exc:
+        parser.error(str(exc))
+        return 2  # pragma: no cover - parser.error exits
 
     if args.list_conferences:
         try:
@@ -370,8 +430,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     preset = "nonstandard" if args.nonstandard and args.preset == "federal" else args.preset
 
+    spec: Optional[HorizonSpec] = None
+    pto, pto_year = args.pto, list(args.pto_year)
     try:
-        start, end, start_year, end_year = resolve_window(args, today)
+        if args.pto_hours is None and args.hours_per_day != "8":
+            print("note: --hours-per-day has no effect without --pto-hours", file=sys.stderr)
+        if _wants_horizon(args):
+            spec = _horizon_spec(args, today)
+            pto = spec.refill_days
+            # The balance is this year's allowance; the refill applies from the next
+            # January 1. A --pto-year entry overrides either.
+            pto_year = [f"{today.year}={spec.balance_days}"] + pto_year
+            start, end = today, spec.end
+            start_year, end_year = today.year, spec.end.year
+        else:
+            start, end, start_year, end_year = resolve_window(args, today)
         config = build_config(
             preset=preset,
             config_path=args.config_path,
@@ -379,8 +452,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             drop=args.drop,
             workweek=args.workweek,
             observance=args.observance,
-            pto=args.pto,
-            pto_by_year=args.pto_year,
+            pto=pto,
+            pto_by_year=pto_year,
             floating=args.floating,
             floating_by_year=args.floating_year,
             carryover=args.carryover,
@@ -510,12 +583,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_consecutive_pto=config.max_consecutive_pto,
                     committed=config.committed,
                     long_break_bonus=long_break_bonus,
+                    max_work_streak=args.max_work_streak,
                 )
         except ValueError as exc:
             parser.error(str(exc))
             return 2  # pragma: no cover - parser.error exits
 
-    show_efficiency = args.efficiency or wants_curve
+    show_efficiency = args.efficiency or wants_curve or spec is not None
+    horizon_block = None
+    if spec is not None and plan is not None:
+        horizon_block = _horizon_block(spec, plan, config)
     # The curve is always computed for the stop conditions, but printed only on request.
     shown_curve = curve if args.curve else None
 
@@ -525,6 +602,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 config, holidays_by_year, opportunities_by_year, plan,
                 efficiency=show_efficiency, curve=shown_curve, objective=objective,
                 goal=goal_summary,
+                horizon=horizon_json(*horizon_block) if horizon_block else None,
             )
         )
     elif args.format == "ics":
@@ -550,7 +628,65 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ),
             end="",
         )
+        if horizon_block:
+            print("\n" + "\n".join(describe_horizon(*horizon_block)))
     return 0
+
+
+def _wants_horizon(args: argparse.Namespace) -> bool:
+    return any(
+        value is not None
+        for value in (args.pto_hours, args.refill_hours, args.through, args.months,
+                      args.max_work_streak)
+    )
+
+
+def _horizon_spec(args: argparse.Namespace, today: dt.date) -> HorizonSpec:
+    """Validate the planning-from-today options against the rest of the command line."""
+    if args.pto_hours is None:
+        raise ValueError(
+            "--refill-hours, --through, --months and --max-work-streak need --pto-hours "
+            "(your balance now, in hours)"
+        )
+    if args.pto is not None:
+        raise ValueError(
+            "--pto-hours replaces --pto: give your balance in hours, and the January refill "
+            "with --refill-hours"
+        )
+    if args.start_year is not None or args.end_year is not None or args.from_today:
+        raise ValueError(
+            "--pto-hours plans from today; --start-year, --end-year and --from-today do "
+            "not apply (use --today, --through or --months)"
+        )
+    if args.max_work_streak is not None and (
+        args.goal is not None or args.min_vacation_days is not None or args.max_breaks is not None
+        or args.prefer
+    ):
+        raise ValueError(
+            "--max-work-streak belongs to the classic planner and cannot be combined with "
+            "--goal or its options"
+        )
+    return build_horizon(
+        today,
+        args.pto_hours,
+        hours_per_day=args.hours_per_day,
+        refill_hours=args.refill_hours if args.refill_hours is not None else 0,
+        through=args.through,
+        months=args.months,
+        carryover_days=args.carryover or 0,
+        max_work_streak=args.max_work_streak,
+    )
+
+
+def _horizon_block(spec: HorizonSpec, plan: PtoPlan, config: CompanyConfig):
+    """Rest metrics and year-end losses for a plan made from today."""
+    # The carryover may have come from a config file rather than --carryover.
+    spec = replace(spec, carryover_days=config.carryover)
+    years = list(range(spec.today.year, spec.end.year + 2))
+    rolled = _rolled_in(plan.budget, plan, years)
+    ends = year_ends(plan, rolled, spec.end)
+    granted = {y: plan.granted_total(y) for y in sorted(plan.granted_by_year)}
+    return spec, rest_metrics(plan.days), ends, granted
 
 
 def _rolled_in(budget: PtoBudget, result, years: Sequence[int]) -> Dict[int, int]:
