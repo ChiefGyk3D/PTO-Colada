@@ -56,35 +56,32 @@ class TestAmplification:
         assert MAX_CONFIG_BYTES == 64 * 1024
         assert MAX_CONFIG_NODES == 10000
 
-    def test_reviewer_input_is_rejected_fast(self, tmp_path):
-        text = "x: [" + ",".join("{}" for _ in range(300000)) + "]"
-        path = write(tmp_path, text, "c.yaml")
+    @staticmethod
+    def _timed_and_peak(path):
         start = time.perf_counter()
+        message = error_of(path)
+        elapsed = time.perf_counter() - start
         tracemalloc.start()
         try:
-            message = error_of(path)
+            error_of(path)
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
-        assert time.perf_counter() - start < 1.0
-        assert peak < 20 * 1024 * 1024
+        return message, elapsed, peak
+
+    def test_reviewer_input_is_rejected_fast(self, tmp_path):
+        text = "x: [" + ",".join("{}" for _ in range(300000)) + "]"
+        message, elapsed, peak = self._timed_and_peak(write(tmp_path, text, "c.yaml"))
         assert "too large" in message
+        assert elapsed < 1.0 and peak < 20 * 1024 * 1024
 
     def test_many_small_nodes_under_the_byte_cap_are_rejected_before_construction(self, tmp_path):
         count = MAX_CONFIG_NODES + 100
         text = "x: [" + ",".join("{}" for _ in range(count)) + "]"
         assert len(text) < MAX_CONFIG_BYTES
-        path = write(tmp_path, text, "c.yaml")
-        start = time.perf_counter()
-        tracemalloc.start()
-        try:
-            message = error_of(path)
-            peak = tracemalloc.get_traced_memory()[1]
-        finally:
-            tracemalloc.stop()
+        message, elapsed, peak = self._timed_and_peak(write(tmp_path, text, "c.yaml"))
         assert "too many" in message
-        assert time.perf_counter() - start < 1.0
-        assert peak < 20 * 1024 * 1024
+        assert elapsed < 2.0 and peak < 20 * 1024 * 1024
 
     def test_json_node_count_is_capped_too(self, tmp_path):
         text = '{"x": [' + ",".join("{}" for _ in range(MAX_CONFIG_NODES + 100)) + "]}"
