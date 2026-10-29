@@ -481,3 +481,88 @@ class TestProvisionalMarker:
         assert not any(r[0] == "PROVISIONAL" for r in wb["Summary"].iter_rows(values_only=True))
         assert all(not r[-1] for r in list(wb["Breaks"].iter_rows(values_only=True))[1:])
         assert all(not r[-1] for r in list(wb["PTO"].iter_rows(values_only=True))[1:])
+
+
+class TestProvisionalRoundTwo:
+    def test_pto_inside_a_flagged_break_is_flagged(self, tmp_path, capsys):
+        out = tmp_path / "p.csv"
+        code, _ = run(["--start-year", "2027", "--years", "1", "--pto", "17",
+                       "--config", EMPLOYER, "--export-csv", str(out)], capsys)
+        assert code == 0
+        _, body = _csv_rows(out)
+        breaks = [r for r in body if r[0] == "break" and r[-1]]
+        ptos = [r for r in body if r[0] == "pto"]
+        assert breaks and ptos
+        for p in ptos:
+            inside = [b for b in breaks if _within(b, p[1])]
+            if inside:
+                assert p[-1] == inside[0][-1]
+            else:
+                assert p[-1] == ""
+        assert any(p[-1] for p in ptos)
+
+    def test_xlsx_pto_sheet_follows_flagged_breaks(self, tmp_path, capsys):
+        openpyxl = pytest.importorskip("openpyxl")
+        out = tmp_path / "p.xlsx"
+        run(["--start-year", "2027", "--years", "1", "--pto", "17",
+             "--config", EMPLOYER, "--export-xlsx", str(out)], capsys)
+        wb = openpyxl.load_workbook(out)
+        breaks = [r for r in list(wb["Breaks"].iter_rows(values_only=True))[1:] if r[-1]]
+        for r in list(wb["PTO"].iter_rows(values_only=True))[1:]:
+            inside = [b for b in breaks if b[0] <= r[0] <= b[1]]
+            assert (r[2] or "") == (inside[0][-1] if inside else "")
+
+    def test_goal_context_holiday_is_flagged(self):
+        from types import SimpleNamespace
+        from pto_colada.catalog import ResolvedHoliday
+        config = build_config(preset="federal", years=[2026])
+        ctx = ResolvedHoliday("Padding Day", dt.date(2027, 1, 1), dt.date(2027, 1, 1), "assumed")
+        goal = SimpleNamespace(context_holidays=[ctx])
+        pto = Day(dt.date(2026, 12, 31), DayKind.PTO)
+        hol = Day(ctx.observed, DayKind.HOLIDAY, holiday="Padding Day")
+        plan = PtoPlan(
+            days=[pto, hol], breaks=[Break(dt.date(2026, 12, 31), dt.date(2027, 1, 1), [pto, hol])],
+            pto_dates=[pto.date], budget=PtoBudget(default=1),
+            spent_by_year={2026: 1}, granted_by_year={2026: 1}, min_break=2,
+        )
+        by_year = {2026: []}
+        rows = list(csv.reader(render_csv(plan, config, by_year, goal).splitlines()))[1:]
+        assert all("Padding Day: assumed" in r[-1] for r in rows) and len(rows) == 2
+        assert all(r[-1] == "" for r in
+                   list(csv.reader(render_csv(plan, config, by_year).splitlines()))[1:])
+        openpyxl = pytest.importorskip("openpyxl")
+        wb = exports.build_workbook(plan, config, None, by_year, goal)
+        summary = list(wb["Summary"].iter_rows(values_only=True))
+        assert any(isinstance(r[0], str) and r[0] == "Unconfirmed 2027-01-01" for r in summary)
+
+    def test_provisional_dates_without_holidays_by_year(self):
+        config = build_config(preset="federal", years=[2027], observe=["Eid al-Fitr"])
+        marks = exports.provisional_dates(config, None)
+        assert marks and all("moon sighting" in r for rs in marks.values() for r in rs)
+        assert exports.provisional_dates(build_config(preset="federal", years=[2027]), None) == {}
+
+    def _synthetic(self):
+        from types import SimpleNamespace
+        from pto_colada.catalog import ResolvedHoliday
+        config = build_config(preset="federal", years=[2026])
+        ctx = [ResolvedHoliday("Maybe Day", dt.date(2026, 3, 10), dt.date(2026, 3, 10), "assumed"),
+               ResolvedHoliday("Other Day", dt.date(2026, 6, 15), dt.date(2026, 6, 15), "assumed")]
+        goal = SimpleNamespace(context_holidays=ctx)
+        days = [Day(dt.date(2026, 3, d), DayKind.PTO) for d in (9, 10, 12)]
+        brk = Break(dt.date(2026, 3, 9), dt.date(2026, 3, 10), days[:2])
+        plan = PtoPlan(
+            days=days, breaks=[brk],
+            pto_dates=[dt.date(2026, 3, 9), dt.date(2026, 3, 12), dt.date(2026, 6, 15)],
+            budget=PtoBudget(default=3), spent_by_year={2026: 3}, granted_by_year={2026: 3},
+            min_break=2,
+        )
+        return config, plan, goal
+
+    def test_no_widening_and_own_date_fallback(self):
+        config, plan, goal = self._synthetic()
+        rows = list(csv.reader(render_csv(plan, config, {2026: []}, goal).splitlines()))[1:]
+        by = {(r[0], r[1]): r[-1] for r in rows}
+        assert "Maybe Day" in by[("break", "2026-03-09")]
+        assert by[("pto", "2026-03-09")] == by[("break", "2026-03-09")]  # inside flagged break
+        assert by[("pto", "2026-03-12")] == ""  # outside the break, not widened
+        assert "Other Day" in by[("pto", "2026-06-15")]  # own provisional date, no break

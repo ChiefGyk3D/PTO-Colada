@@ -806,7 +806,11 @@ pto-colada --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
   `provisional` is blank, or `yes: <reason>` when the break or PTO day contains a
   date that is not confirmed: an employer holiday with status `assumed` or
   `observed-unconfirmed`, or a Muslim date from `--observe` (moon sighting). The
-  reasons use the same wording as the text, JSON and ICS output. Needs
+  reasons use the same wording as the text, JSON and ICS output. A break is
+  flagged when a provisional date lies within its start to end; a PTO day is
+  flagged when it lies inside a flagged break (it may exist only to bridge that
+  date) and carries the break's reason, or when its own date is provisional.
+  Days next to a flagged break are not flagged. Needs
   `--pto`. Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
   is prefixed with `'` so a spreadsheet cannot run it as a formula. In the
   workbook, text is stored as string cells, so a value such as `=SUM(1)` is

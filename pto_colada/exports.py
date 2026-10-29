@@ -156,6 +156,23 @@ def _provisional_cell(
     return "yes: " + "; ".join(OrderedDict.fromkeys(reasons)) if reasons else ""
 
 
+def _pto_cell(
+    marks: Dict[dt.date, List[str]], plan: PtoPlan, date: dt.date
+) -> str:
+    """A PTO day is provisional when it lies inside a flagged break.
+
+    It carries that break's reason text (the day may exist only to bridge the
+    unconfirmed date). A day outside every flagged break is flagged only if its
+    own date is provisional. Neighbors are never widened.
+    """
+    for item in plan.breaks:
+        if item.start <= date <= item.end:
+            cell = _provisional_cell(marks, item.start, item.end)
+            if cell:
+                return cell
+    return _provisional_cell(marks, date, date)
+
+
 def plan_rows(
     plan: PtoPlan,
     config: CompanyConfig,
@@ -175,7 +192,7 @@ def plan_rows(
     for date in plan.pto_dates:
         rows.append([
             "pto", date.isoformat(), date.isoformat(), 1, 1, "", named.get(date, ""),
-            _provisional_cell(marks, date, date),
+            _pto_cell(marks, plan, date),
         ])
     return rows
 
@@ -299,7 +316,7 @@ def build_workbook(
     put(pto, ["Date", "Reason", "Provisional"])
     named = _named_days(config)
     for date in plan.pto_dates:
-        put(pto, [date.isoformat(), named.get(date, ""), _provisional_cell(marks, date, date)])
+        put(pto, [date.isoformat(), named.get(date, ""), _pto_cell(marks, plan, date)])
 
     # PTO per month
     monthly = wb.create_sheet("PTO per month")
