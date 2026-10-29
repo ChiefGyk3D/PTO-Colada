@@ -11,6 +11,7 @@ import pytest
 from longweekend.cli import main
 from longweekend.config import (
     MAX_CONFIG_BYTES,
+    MAX_CONFIG_DEPTH,
     MAX_CONFIG_NODES,
     build_config,
     load_config_file,
@@ -82,6 +83,16 @@ class TestAmplification:
         message, elapsed, peak = self._timed_and_peak(write(tmp_path, text, "c.yaml"))
         assert "too many" in message
         assert elapsed < 2.0 and peak < 20 * 1024 * 1024
+
+    def test_the_yaml_cap_trips_before_any_object_is_constructed(self, tmp_path, monkeypatch):
+        def forbidden(self, node):
+            raise AssertionError("constructed Python objects for an over-cap document")
+
+        monkeypatch.setattr(yaml.constructor.BaseConstructor, "construct_document", forbidden)
+        text = "x: [" + ",".join("{}" for _ in range(MAX_CONFIG_NODES + 100)) + "]"
+        assert "too many" in error_of(write(tmp_path, text, "c.yaml"))
+        deep = "x: " + "[" * (MAX_CONFIG_DEPTH + 2) + "]" * (MAX_CONFIG_DEPTH + 2)
+        assert "nested" in error_of(write(tmp_path, deep, "d.yaml"))
 
     def test_json_node_count_is_capped_too(self, tmp_path):
         text = '{"x": [' + ",".join("{}" for _ in range(MAX_CONFIG_NODES + 100)) + "]}"
