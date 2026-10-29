@@ -586,6 +586,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_consecutive_pto=config.max_consecutive_pto,
                     committed=config.committed,
                     long_break_bonus=long_break_bonus,
+                    max_work_streak=args.max_work_streak,
                 )
             if curve is not None and config.min_return is not None:
                 chosen = curve.stop_for_min_return(config.min_return)

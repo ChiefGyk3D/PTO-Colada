@@ -159,6 +159,7 @@ class _Planner:
         max_consecutive_pto: Optional[int],
         committed: Optional[Set[dt.date]],
         long_break_bonus: int,
+        max_work_streak: Optional[int] = None,
     ) -> None:
         self.days = days
         self.budget = budget
@@ -167,6 +168,7 @@ class _Planner:
         self.max_consecutive_pto = max_consecutive_pto
         self.committed = committed
         self.long_break_bonus = long_break_bonus
+        self.max_work_streak = max_work_streak
 
     def __call__(self, cap: int) -> PtoPlan:
         return optimize_pto(
@@ -176,6 +178,7 @@ class _Planner:
             max_consecutive_pto=self.max_consecutive_pto,
             committed=self.committed,
             long_break_bonus=self.long_break_bonus,
+            max_work_streak=self.max_work_streak,
         )
 
 
@@ -429,6 +432,7 @@ def return_curve(
     committed: Optional[Set[dt.date]] = None,
     long_break_bonus: int = 0,
     max_budget: Optional[int] = None,
+    max_work_streak: Optional[int] = None,
 ) -> ReturnCurve:
     """Record what every per-year budget from 0 to the ceiling buys.
 
@@ -442,6 +446,12 @@ def return_curve(
     its length, so which of several equally scored plans it settles on decides
     how many days land in breaks, and only the planner itself can say. Those
     curves replan each budget.
+
+    ``max_work_streak`` is honored the same way as in :func:`optimize_pto`. The
+    one-pass tables do not track the working-day streak, so a curve with a
+    limit replans each budget too (correctness over speed). Budgets that
+    cannot meet the limit are left off the curve; if the ceiling cannot meet
+    it, the planner's error is raised.
     """
     years = sorted({d.date.year for d in days})
     ceiling = max_budget if max_budget is not None else max(
@@ -467,9 +477,10 @@ def return_curve(
         usable = min(usable, max(budget.for_year(y) for y in years))
 
     planner = _Planner(
-        days, budget, years, min_break, max_consecutive_pto, committed, long_break_bonus
+        days, budget, years, min_break, max_consecutive_pto, committed, long_break_bonus,
+        max_work_streak,
     )
-    if long_break_bonus or not days:
+    if long_break_bonus or max_work_streak is not None or not days:
         return _replanned_curve(planner, ceiling, usable)
 
     computed = _one_pass_points(
