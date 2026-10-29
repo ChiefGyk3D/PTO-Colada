@@ -196,6 +196,9 @@ MAX_CONFIG_NODES = 10000
 #: on every Python version.
 _MAX_INT_DIGITS = 18
 _YAML_INT = "tag:yaml.org,2002:int"
+_PLAIN_INT = re.compile(r"[-+]?(?:0|[1-9][0-9]{0,%d})" % (_MAX_INT_DIGITS - 1))
+#: Explicit YAML tags whose values no config key can use.
+_REJECTED_TAGS = ("binary", "set", "omap", "pairs")
 
 
 def _read_regular_file(path: str) -> bytes:
@@ -319,10 +322,46 @@ def _yaml_loader(path: str):
     }
     StrictLoader.add_implicit_resolver(
         _YAML_INT,
-        re.compile(r"^[-+]?(?:0|[1-9][0-9]{0,%d})$" % (_MAX_INT_DIGITS - 1)),
+        re.compile("^" + _PLAIN_INT.pattern + "$"),
         list("-+0123456789"),
     )
+
+    # The same rule for an explicit !!int tag, which skips the resolver.
+    def construct_int(loader, node):  # type: ignore[no-untyped-def]
+        text = loader.construct_scalar(node)
+        if not isinstance(text, str) or not _PLAIN_INT.fullmatch(text):
+            raise ValueError(
+                f"{path}: {text!r} is not a whole number written in plain decimal, like 17"
+            )
+        return int(text)
+
+    default_float = yaml.SafeLoader.yaml_constructors["tag:yaml.org,2002:float"]
+
+    def construct_float(loader, node):  # type: ignore[no-untyped-def]
+        value = default_float(loader, node)
+        text = str(loader.construct_scalar(node)).lower()
+        if value != value or value in (float("inf"), float("-inf")):
+            if ".inf" not in text and ".nan" not in text:
+                raise ValueError(f"{path}: {text!r} is not a finite number")
+        return value
+
+    def reject_tag(loader, node):  # type: ignore[no-untyped-def]
+        raise ValueError(f"{path}: the YAML tag {node.tag} is not allowed in config files")
+
+    StrictLoader.add_constructor(_YAML_INT, construct_int)
+    StrictLoader.add_constructor("tag:yaml.org,2002:float", construct_float)
+    for name in _REJECTED_TAGS:
+        StrictLoader.add_constructor("tag:yaml.org,2002:" + name, reject_tag)
     return StrictLoader
+
+
+def _yaml_problem(exc: Exception) -> str:
+    """Describe a YAML error by position and problem only; the source line is left out."""
+    mark = getattr(exc, "problem_mark", None)
+    problem = getattr(exc, "problem", None) or getattr(exc, "context", None) or "syntax error"
+    if mark is not None:
+        return f"invalid YAML at line {mark.line + 1}, column {mark.column + 1}: {problem}"
+    return f"invalid YAML: {problem}"
 
 
 def _check_depth(data: object, path: str) -> None:
@@ -335,6 +374,9 @@ def _check_depth(data: object, path: str) -> None:
         if nodes > MAX_CONFIG_NODES:
             raise ValueError(f"{path} has too many values (limit {MAX_CONFIG_NODES})")
         if isinstance(item, dict):
+            nodes += len(item)  # the keys, counted as the YAML composer counts them
+            if nodes > MAX_CONFIG_NODES:
+                raise ValueError(f"{path} has too many values (limit {MAX_CONFIG_NODES})")
             children = list(item.values())
         elif isinstance(item, list):
             children = list(item)
@@ -373,7 +415,7 @@ def load_config_file(path: str) -> Dict[str, object]:
                 node = loader.get_single_node()
                 data = loader.construct_document(node) if node is not None else None
             except yaml.YAMLError as exc:
-                raise ValueError(f"{path} is not valid YAML: {exc}") from None
+                raise ValueError(f"{path} is {_yaml_problem(exc)}") from None
             finally:
                 loader.dispose()
         else:
