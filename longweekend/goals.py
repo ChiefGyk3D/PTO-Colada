@@ -39,9 +39,9 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from .catalog import DEFAULT_WORKWEEK, ResolvedHoliday
+from .catalog import ResolvedHoliday
 from .planner import PtoBudget, _validate_commitments
 from .schedule import Day, DayKind, build_days
 

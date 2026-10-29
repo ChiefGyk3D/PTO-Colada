@@ -26,7 +26,7 @@ Rules
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from .catalog import DEFAULT_WORKWEEK

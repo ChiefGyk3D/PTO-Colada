@@ -16,7 +16,7 @@ from .goals import GOALS, build_goal_days, goal_spec, optimize_goal
 from .honest import score_pto
 from .planner import PtoBudget, PtoPlan, optimize_pto
 from .report import GoalSummary, render_ics, render_json, render_text
-from .schedule import Break, Day, DayKind, Opportunity, build_days, find_opportunities
+from .schedule import Break, Day, Opportunity, build_days, find_opportunities
 
 __all__ = ["main", "build_parser"]
 
