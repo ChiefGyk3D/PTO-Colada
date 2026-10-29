@@ -176,3 +176,12 @@ class TestJsonDetails:
             main(["--config", path, "--start-year", "2027", "--years", "1"])
         assert exc.value.code == 2
         assert "pto_days" in capsys.readouterr().err
+
+
+class TestDocumentedLimits:
+    def test_flat_list_of_9990_numbers_fits_and_5000_pairs_do_not(self, tmp_path):
+        flat = json.dumps({"x": list(range(9990))})
+        assert load_config_file(write(tmp_path, flat))["x"][-1] == 9989
+        pairs = json.dumps({"k%d" % i: 0 for i in range(5000)})
+        assert "too many" in error_of(write(tmp_path, pairs, "b.json"))
+        assert load_config_file(write(tmp_path, json.dumps({"k%d" % i: 0 for i in range(4999)}), "c.json"))
