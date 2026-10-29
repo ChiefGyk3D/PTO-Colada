@@ -63,7 +63,7 @@ class TestYamlFeatures:
 
     def test_merge_keys_are_rejected(self, tmp_path):
         text = "base: {name: X}\nholidays:\n  - <<: {name: Y, date: 2027-03-03}\n"
-        assert "merge" in load_error(write(tmp_path, text, "c.yaml")).lower()
+        assert "not allowed" in load_error(write(tmp_path, text, "c.yaml")).lower()
 
     def test_malformed_yaml_is_a_clean_error(self, tmp_path):
         assert load_error(write(tmp_path, "a: [1, 2\n", "c.yaml"))
