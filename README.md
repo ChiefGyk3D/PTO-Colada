@@ -51,7 +51,8 @@ installing, either as `python3 -m longweekend.cli` or through the original
 `python3 holiday.py` entry point, which still accepts its old arguments.
 
 PyYAML is optional, and only needed for `.yaml` company configs:
-`pip install -e ".[yaml]"`.
+`pip install -e ".[yaml]"`. The Excel export needs `openpyxl`:
+`pip install -e ".[xlsx]"`.
 
 ## Usage
 
@@ -692,6 +693,49 @@ day, and every resulting break, so you can import the plan straight into a
 calendar. Add `--no-holidays` to export only the PTO days and breaks.
 
 Note: event UIDs in `.ics` exports changed once (SHA-1 to SHA-256); re-importing an older export will not match the new events.
+
+### Export to files
+
+Each export is written by one flag, and they can be combined. The plan still
+prints to the terminal as usual; each file is reported on stderr.
+
+```
+long-weekend --pto 15 --export-ics timeoff.ics        # import as a NEW calendar
+long-weekend --pto 15 --export-csv timeoff.csv        # breaks and PTO days
+long-weekend --pto 15 --export-xlsx timeoff.xlsx      # summary sheet and charts
+long-weekend --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
+```
+
+- `--export-ics FILE`: an `.ics` named "<company> time off" (`X-WR-CALNAME`),
+  with an all-day event for each holiday, PTO day and break. Import it into a
+  new calendar so the whole plan can be removed by deleting that calendar.
+  `--no-holidays` leaves the holidays out. Works without `--pto` (holidays only).
+- `--export-csv FILE`: one row per break and per PTO day with columns `kind`,
+  `start`, `end`, `length_days`, `pto_cost`, `efficiency`, `description`. Needs
+  `--pto`. Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
+  is prefixed with `'` so a spreadsheet cannot run it as a formula. In the
+  workbook, text is stored as string cells, so a value such as `=SUM(1)` is
+  shown as text rather than evaluated.
+- `--export-xlsx FILE`: a workbook with a Summary sheet (efficiency score, PTO
+  booked, days in breaks, per-year budget), Breaks, PTO and PTO per month
+  sheets, and native charts for the return curve, the breaks timeline and PTO
+  per month. Needs `--pto`. With `--goal` there is no return curve, so that
+  sheet and chart are left out.
+
+The workbook needs the optional extra; without it the command stops with
+a message naming the install line and writes nothing:
+
+```
+pip install -e ".[xlsx]"        # or: pip install 'long-weekend-planner[xlsx]'
+```
+
+Files are written atomically (a temporary file in the same directory, then a
+rename). An existing regular file is replaced and keeps its permissions. The
+directory part of a path may be a symlink and is resolved; the final component
+must not be a symbolic link, and a directory or other non-regular file is
+refused. Two flags that resolve to the same file (same real path, or a hard
+link to it) are refused. An unwritable directory is an error message, not a
+traceback.
 
 ## Using it as a library
 

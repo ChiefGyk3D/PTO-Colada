@@ -13,6 +13,7 @@ from .conferences import describe_catalog, load_conferences
 from .observances import describe_sets
 from .config import CompanyConfig, _bounded_date, build_config
 from .efficiency import ReturnCurve, return_curve
+from .exports import ExportError, write_exports
 from .goals import GOALS, PAD_DAYS, build_goal_days, goal_spec, optimize_goal
 from .honest import score_pto
 from .horizon import (
@@ -332,6 +333,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the conference catalog and its dates, and exit",
     )
     output.add_argument(
+        "--export-ics", metavar="FILE",
+        help="write an .ics to import as its own new calendar (holidays, PTO days, breaks)",
+    )
+    output.add_argument(
+        "--export-csv", metavar="FILE",
+        help="write the breaks and PTO days as CSV (needs --pto)",
+    )
+    output.add_argument(
+        "--export-xlsx", metavar="FILE",
+        help=(
+            "write an Excel workbook with a summary and charts (needs --pto and "
+            "the optional extra: pip install 'long-weekend-planner[xlsx]')"
+        ),
+    )
+    output.add_argument(
         "--interactive", "-i", action="store_true",
         help="answer a few questions instead of remembering flags",
     )
@@ -553,7 +569,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         long_break_bonus = 1 if args.style == "vacations" else 0
         try:
-            if wants_curve:
+            if wants_curve or args.export_xlsx:
                 curve = return_curve(
                     days,
                     budget,
@@ -588,6 +604,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
             return 2  # pragma: no cover - parser.error exits
+
+    if any(v is not None for v in (args.export_ics, args.export_csv, args.export_xlsx)):
+        try:
+            written = write_exports(
+                config, holidays_by_year, plan, goal=goal_summary, curve=curve,
+                include_holidays=not args.no_holidays, ics=args.export_ics,
+                csv_path=args.export_csv, xlsx=args.export_xlsx,
+            )
+        except ExportError as exc:
+            parser.error(str(exc))
+            return 2  # pragma: no cover - parser.error exits
+        for path in written:
+            print(f"wrote {path}", file=sys.stderr)
 
     show_efficiency = args.efficiency or wants_curve or spec is not None
     horizon_block = None
