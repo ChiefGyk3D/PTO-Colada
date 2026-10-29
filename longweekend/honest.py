@@ -81,14 +81,16 @@ class BudgetRow:
     year: int
     used: int
     granted: Optional[int] = None
+    #: Days rolled in from the previous year; spending them is within allowance.
+    carried: int = 0
 
     @property
     def remaining(self) -> Optional[int]:
-        return None if self.granted is None else self.granted - self.used
+        return None if self.granted is None else self.granted + self.carried - self.used
 
     @property
     def over(self) -> int:
-        return 0 if self.granted is None else max(0, self.used - self.granted)
+        return 0 if self.granted is None else max(0, self.used - self.granted - self.carried)
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,7 @@ def score_pto(
     workweek: Optional[Set[int]] = None,
     years: Optional[Sequence[int]] = None,
     budgets: Optional[Mapping[int, int]] = None,
+    carried: Optional[Mapping[int, int]] = None,
 ) -> HonestReport:
     """Score a set of requested PTO dates under the rules in the module docstring.
 
@@ -253,7 +256,8 @@ def score_pto(
 
     budgets = dict(budgets or {})
     rows = [
-        BudgetRow(year=y, used=pto_by_year.get(y, 0), granted=budgets.get(y))
+        BudgetRow(year=y, used=pto_by_year.get(y, 0), granted=budgets.get(y),
+                  carried=(carried or {}).get(y, 0))
         for y in sorted(set(budgets) | set(pto_by_year))
     ]
     return HonestReport(

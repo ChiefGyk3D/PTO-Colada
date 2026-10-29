@@ -275,7 +275,8 @@ def _render_goal(goal: GoalSummary, plan: Optional[PtoPlan]) -> List[str]:
             tail = f", {row.remaining} left over" if row.remaining else ""
             if row.over:
                 tail = f", {row.over} OVER BUDGET"
-            lines.append(f"  {row.year}: {row.used} of {row.granted} used{tail}")
+            carry = f" + {row.carried} carried over" if row.carried else ""
+            lines.append(f"  {row.year}: {row.used} of {row.granted}{carry} used{tail}")
     lines.append("")
 
     lines.append("Every nonworking day of the year, shown separately (free, whatever you book)")
@@ -721,7 +722,7 @@ def _honest_json(rep: HonestReport) -> Dict[str, object]:
         "pto_by_year": {str(y): n for y, n in rep.pto_by_year.items()},
         "budgets": [
             {"year": r.year, "used": r.used, "granted": r.granted,
-             "remaining": r.remaining, "over": r.over}
+             "carried_over": r.carried, "remaining": r.remaining, "over": r.over}
             for r in rep.budget_rows
         ],
         "annual_nonworking": {

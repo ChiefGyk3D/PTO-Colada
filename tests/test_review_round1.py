@@ -107,3 +107,30 @@ def test_same_date_confirmed_and_assumed_end_to_end(tmp_path, capsys):
     assert "PROVISIONAL" not in cli(capsys, *argv)
     assert "provisional" not in json.loads(cli(capsys, *argv, "--format", "json"))
     assert "PROVISIONAL" not in cli(capsys, *argv, "--goal", "weekends")
+
+
+# ----------------------------------------------------------- item 2: carryover
+
+CARRY = ["--config", EXAMPLE, "--start-year", "2027", "--years", "2", "--pto-year", "2027=10",
+         "--pto-year", "2028=2", "--carryover", "5", "--goal", "weekends"]
+
+
+def test_carryover_is_shown_not_flagged_as_over_budget(capsys):
+    data = json.loads(cli(capsys, *CARRY, "--format", "json"))
+    rows = {r["year"]: r for r in data["honest"]["budgets"]}
+    assert rows[2028]["used"] > rows[2028]["granted"]  # it did borrow from 2027
+    assert rows[2028]["carried_over"] == rows[2028]["used"] - rows[2028]["granted"]
+    assert rows[2028]["over"] == 0
+    text = cli(capsys, *CARRY)
+    assert "OVER BUDGET" not in text
+    row = rows[2028]
+    assert f"{row['used']} of {row['granted']} + {row['carried_over']} carried over" in text
+
+
+def test_a_real_overspend_is_still_flagged():
+    from longweekend.honest import score_pto
+    r = score_pto({D(2027, 1, 4), D(2027, 2, 5)}, {}, years=[2027], budgets={2027: 1})
+    assert r.budget_rows[0].over == 1
+    r = score_pto({D(2027, 1, 4), D(2027, 2, 5)}, {}, years=[2027], budgets={2027: 1},
+                  carried={2027: 1})
+    assert r.budget_rows[0].over == 0 and r.budget_rows[0].carried == 1

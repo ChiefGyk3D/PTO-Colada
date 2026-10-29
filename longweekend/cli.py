@@ -544,6 +544,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return 0
 
 
+def _rolled_in(budget: PtoBudget, result, years: Sequence[int]) -> Dict[int, int]:
+    """Days each year received from the one before, mirroring the planner's rollover rule."""
+    rolled: Dict[int, int] = {}
+    previous = None
+    for year in years:
+        if previous is not None:
+            available = (
+                result.granted_by_year.get(previous, 0)
+                + result.floating_by_year.get(previous, 0)
+                + rolled.get(previous, 0)
+            )
+            left = max(0, available - result.spent_by_year.get(previous, 0))
+            cap = min(budget.carryover, result.granted_by_year.get(previous, 0))
+            rolled[year] = min(left, cap)
+        previous = year
+    return {y: n for y, n in rolled.items() if n}
+
+
 def _plan_for_goal(
     config: CompanyConfig,
     window_days: Sequence[Day],
@@ -593,7 +611,8 @@ def _plan_for_goal(
         }
         results[name] = result
         reports[name] = score_pto(
-            requested, holiday_names, workweek=config.workweek, years=years, budgets=grants
+            requested, holiday_names, workweek=config.workweek, years=years, budgets=grants,
+            carried=_rolled_in(budget, result, years),
         )
 
     result, report = results[chosen_name], reports[chosen_name]
