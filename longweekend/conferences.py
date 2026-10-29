@@ -13,10 +13,9 @@ catalog; the format is the same and your entries win on a name clash.
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .catalog import parse_rule
 
@@ -96,44 +95,92 @@ def load_conferences(path: Optional[str] = None) -> List[Conference]:
 
 
 def _read(path: str) -> List[Conference]:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"conference file not found: {path}")
-    with open(path, "r", encoding="utf-8") as handle:
-        try:
-            data = json.load(handle)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    # Imported here: config imports this module at load time.
+    from .config import load_json_file
+
+    data = load_json_file(path, label="conference file")
 
     entries = data.get("conferences") if isinstance(data, dict) else data
     if not isinstance(entries, list):
         raise ValueError(f"{path}: expected a 'conferences' list")
 
     out: List[Conference] = []
+    seen_names: Dict[str, str] = {}
     for entry in entries:
         if not isinstance(entry, dict) or "name" not in entry:
             raise ValueError(f"{path}: every conference needs a 'name': {entry!r}")
+        name = str(entry["name"])
+        where = f"{path}: {name}"
+        if _key(name) in seen_names:
+            raise ValueError(f"{where} is listed more than once (also as {seen_names[_key(name)]!r})")
+        seen_names[_key(name)] = name
+
+        raw_dates = entry.get("dates") or {}
+        if not isinstance(raw_dates, dict):
+            raise ValueError(f"{where} 'dates' must be a mapping of year to [start, end]")
         dates: Dict[int, tuple] = {}
-        for year, span in (entry.get("dates") or {}).items():
+        for year, span in raw_dates.items():
             if not isinstance(span, list) or len(span) != 2:
+                raise ValueError(f"{where} {year} must be [start, end] in YYYY-MM-DD")
+            try:
+                start, end = (dt.date.fromisoformat(str(d)) for d in span)
+                year_number = int(year)
+            except ValueError:
                 raise ValueError(
-                    f"{path}: {entry['name']} {year} must be [start, end] in YYYY-MM-DD"
-                )
-            start, end = (dt.date.fromisoformat(str(d)) for d in span)
+                    f"{where} {year}: the year and both dates must be valid, as YYYY-MM-DD"
+                ) from None
             if end < start:
-                raise ValueError(f"{path}: {entry['name']} {year} ends before it starts")
-            dates[int(year)] = (start, end)
+                raise ValueError(f"{where} {year} ends before it starts")
+            if year_number in dates:
+                raise ValueError(f"{where} lists the year {year_number} more than once")
+            dates[year_number] = (start, end)
+
+        aliases = entry.get("aliases", ())
+        if not isinstance(aliases, (list, tuple)) or not all(isinstance(a, str) for a in aliases):
+            raise ValueError(f"{where} 'aliases' must be a list of text")
+
+        recurrence = entry.get("recurrence")
+        if recurrence is not None:
+            if not isinstance(recurrence, dict) or not isinstance(recurrence.get("when"), str):
+                raise ValueError(f"{where} 'recurrence' needs a text 'when' rule")
+            recurrence = dict(recurrence, days=_recurrence_days(recurrence.get("days", 1), where))
         out.append(
             Conference(
-                name=str(entry["name"]),
+                name=name,
                 city=str(entry.get("city", "")),
                 url=str(entry.get("url", "")),
                 note=str(entry.get("note", "")),
-                aliases=tuple(entry.get("aliases", ())),
+                aliases=tuple(aliases),
                 dates=dates,
-                recurrence=entry.get("recurrence"),
+                recurrence=recurrence,
             )
         )
     return out
+
+
+#: Longest event a recurrence rule may describe, in days.
+MAX_RECURRENCE_DAYS = 366
+
+
+def _recurrence_days(value: Any, where: str) -> int:
+    """A whole number of days from 1 to :data:`MAX_RECURRENCE_DAYS`.
+
+    Whole-number floats and numeric text are still accepted, as before.
+    """
+    bad = ValueError(
+        f"{where} recurrence 'days' must be a whole number from 1 to {MAX_RECURRENCE_DAYS}"
+    )
+    if isinstance(value, bool):
+        raise bad
+    try:
+        if isinstance(value, float) and value != int(value):
+            raise bad
+        days = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise bad from None
+    if not 1 <= days <= MAX_RECURRENCE_DAYS:
+        raise bad
+    return days
 
 
 def find_conference(name: str, conferences: Sequence[Conference]) -> Conference:
