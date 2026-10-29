@@ -812,7 +812,16 @@ pto-colada --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
   new calendar so the whole plan can be removed by deleting that calendar.
   `--no-holidays` leaves the holidays out. Works without `--pto` (holidays only).
 - `--export-csv FILE`: one row per break and per PTO day with columns `kind`,
-  `start`, `end`, `length_days`, `pto_cost`, `efficiency`, `description`. Needs
+  `start`, `end`, `length_days`, `pto_cost`, `efficiency`, `description`,
+  `provisional` (the last column is new; earlier columns keep their positions).
+  `provisional` is blank, or `yes: <reason>` when the break or PTO day contains a
+  date that is not confirmed: an employer holiday with status `assumed` or
+  `observed-unconfirmed`, or a Muslim date from `--observe` (moon sighting). The
+  reasons use the same wording as the text, JSON and ICS output. A break is
+  flagged when a provisional date lies within its start to end; a PTO day is
+  flagged when it lies inside a flagged break (it may exist only to bridge that
+  date) and carries the break's reason, or when its own date is provisional.
+  Days next to a flagged break are not flagged. Needs
   `--pto`. Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
   is prefixed with `'` so a spreadsheet cannot run it as a formula. In the
   workbook, text is stored as string cells, so a value such as `=SUM(1)` is
@@ -821,7 +830,10 @@ pto-colada --pto 15 --export-ics t.ics --export-csv t.csv --export-xlsx t.xlsx
   booked, days in breaks, per-year budget), Breaks, PTO and PTO per month
   sheets, and native charts for the return curve, the breaks timeline and PTO
   per month. Needs `--pto`. With `--goal` there is no return curve, so that
-  sheet and chart are left out.
+  sheet and chart are left out. The Breaks sheet gains a final `Provisional`
+  column and the PTO sheet a third one, filled the same way as the CSV. When any
+  date is unconfirmed, the Summary sheet ends with a `PROVISIONAL` note and one
+  line per unconfirmed date; without one, there is no note.
 
 The workbook needs the optional extra; without it the command stops with
 a message naming the install line and writes nothing:

@@ -19,6 +19,7 @@ Safety rules shared by all three:
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import os
 import stat
@@ -30,7 +31,15 @@ from .catalog import ResolvedHoliday
 from .config import CompanyConfig
 from .efficiency import ReturnCurve
 from .planner import PtoPlan
-from .report import GoalSummary, _named_days, render_ics
+from .report import (
+    GoalSummary,
+    _MOON_NOTE,
+    _STATUS_NOTE,
+    _named_days,
+    provisional_assumptions,
+    provisional_observances,
+    render_ics,
+)
 
 __all__ = [
     "ExportError",
@@ -46,7 +55,12 @@ XLSX_HINT = (
     "pip install 'pto-colada[xlsx]'"
 )
 
-CSV_HEADER = ["kind", "start", "end", "length_days", "pto_cost", "efficiency", "description"]
+#: ``provisional`` is blank, or ``yes: <reason>`` when the row depends on a day
+#: that is not confirmed. It is last so existing column positions are unchanged.
+CSV_HEADER = [
+    "kind", "start", "end", "length_days", "pto_cost", "efficiency", "description",
+    "provisional",
+]
 
 #: First characters that make a spreadsheet read a cell as a formula (OWASP
 #: CSV injection list, which adds tab and carriage return).
@@ -103,30 +117,99 @@ def _ratio(value: Optional[float]) -> Any:
     return round(value, 3) if value is not None else ""
 
 
-def plan_rows(plan: PtoPlan, config: CompanyConfig) -> List[List[Any]]:
+def provisional_dates(
+    config: CompanyConfig,
+    holidays_by_year: Optional[Dict[int, List[ResolvedHoliday]]] = None,
+    goal: Optional[GoalSummary] = None,
+) -> Dict[dt.date, List[str]]:
+    """Dates that are not confirmed, each with its reasons.
+
+    Same source of truth as the text, JSON and ICS reports
+    (:func:`provisional_assumptions` and :func:`provisional_observances`, with
+    the same wording). Without ``holidays_by_year`` only the personal
+    (moon-sighting) dates are known.
+    """
+    by_year = holidays_by_year or {}
+    assumptions = provisional_assumptions(
+        by_year, goal.context_holidays if goal else ()
+    )
+    years = by_year.keys() if holidays_by_year is not None else {
+        o.date.year for o in config.observances
+    }
+    marks: Dict[dt.date, List[str]] = {}
+    for holiday in assumptions:
+        note = _STATUS_NOTE.get(holiday.status or "", holiday.status)
+        marks.setdefault(holiday.observed, []).append(f"{holiday.name}: {note}")
+    for day in provisional_observances(config, years):
+        marks.setdefault(day.date, []).append(f"{day.name}: {_MOON_NOTE}")
+    return marks
+
+
+def _provisional_cell(
+    marks: Dict[dt.date, List[str]], start: dt.date, end: dt.date
+) -> str:
+    """``yes: <reasons>`` if any provisional date falls in ``start..end``, else blank."""
+    reasons: List[str] = []
+    for date in sorted(marks):
+        if start <= date <= end:
+            reasons.extend(marks[date])
+    return "yes: " + "; ".join(OrderedDict.fromkeys(reasons)) if reasons else ""
+
+
+def _pto_cell(
+    marks: Dict[dt.date, List[str]], plan: PtoPlan, date: dt.date
+) -> str:
+    """A PTO day is provisional when it lies inside a flagged break.
+
+    It carries that break's reason text (the day may exist only to bridge the
+    unconfirmed date). A day outside every flagged break is flagged only if its
+    own date is provisional. Neighbors are never widened.
+    """
+    for item in plan.breaks:
+        if item.start <= date <= item.end:
+            cell = _provisional_cell(marks, item.start, item.end)
+            if cell:
+                return cell
+    return _provisional_cell(marks, date, date)
+
+
+def plan_rows(
+    plan: PtoPlan,
+    config: CompanyConfig,
+    marks: Optional[Dict[dt.date, List[str]]] = None,
+) -> List[List[Any]]:
     """Breaks first, then PTO days, as plain values (dates as ISO strings)."""
     named = _named_days(config)
+    marks = marks or {}
     rows: List[List[Any]] = []
     for item in plan.breaks:
         rows.append([
             "break", item.start.isoformat(), item.end.isoformat(), item.length,
             item.pto_cost, _ratio(item.efficiency),
             "; ".join(OrderedDict.fromkeys(item.holidays)),
+            _provisional_cell(marks, item.start, item.end),
         ])
     for date in plan.pto_dates:
         rows.append([
             "pto", date.isoformat(), date.isoformat(), 1, 1, "", named.get(date, ""),
+            _pto_cell(marks, plan, date),
         ])
     return rows
 
 
-def render_csv(plan: Optional[PtoPlan], config: CompanyConfig) -> str:
+def render_csv(
+    plan: Optional[PtoPlan],
+    config: CompanyConfig,
+    holidays_by_year: Optional[Dict[int, List[ResolvedHoliday]]] = None,
+    goal: Optional[GoalSummary] = None,
+) -> str:
     """Breaks and PTO days as CSV (CRLF line ends, formula-safe text)."""
     plan = _require_plan(plan, "--export-csv")
+    marks = provisional_dates(config, holidays_by_year, goal)
     out = io.StringIO(newline="")
     writer = csv.writer(out)
     writer.writerow(CSV_HEADER)
-    for row in plan_rows(plan, config):
+    for row in plan_rows(plan, config, marks):
         writer.writerow([neutralize(cell) for cell in row])
     return out.getvalue()
 
@@ -166,6 +249,8 @@ def build_workbook(
     plan: PtoPlan,
     config: CompanyConfig,
     curve: Optional[ReturnCurve],
+    holidays_by_year: Optional[Dict[int, List[ResolvedHoliday]]] = None,
+    goal: Optional[GoalSummary] = None,
 ) -> Any:
     """The workbook: Summary, Breaks, PTO, PTO per month and Return curve sheets.
 
@@ -177,6 +262,7 @@ def build_workbook(
     from openpyxl.chart import BarChart, LineChart, Reference
 
     wb = openpyxl.Workbook()
+    marks = provisional_dates(config, holidays_by_year, goal)
 
     def put(ws: Any, row: Sequence[Any]) -> None:
         ws.append(list(row))
@@ -204,23 +290,33 @@ def build_workbook(
     put(summary, ["Year", "Granted", "Spent", "Remaining"])
     for year in sorted(plan.spent_by_year):
         put(summary, [year, plan.granted_total(year), plan.spent_by_year[year], plan.remaining(year)])
+    if marks:
+        put(summary, [])
+        put(summary, ["PROVISIONAL",
+                      "This plan depends on days that are not confirmed. Rows marked "
+                      "'yes' in the Provisional column of the Breaks and PTO sheets "
+                      "contain one; confirm the dates and rerun."])
+        for date in sorted(marks):
+            for reason in marks[date]:
+                put(summary, ["Unconfirmed " + date.isoformat(), reason])
     summary.column_dimensions["A"].width = 48
     summary.column_dimensions["B"].width = 24
 
     # Breaks (the timeline chart reads this sheet)
     breaks = wb.create_sheet("Breaks")
-    put(breaks, ["Start", "End", "Days off", "PTO cost", "Efficiency", "Holidays"])
+    put(breaks, ["Start", "End", "Days off", "PTO cost", "Efficiency", "Holidays", "Provisional"])
     for item in plan.breaks:
         put(breaks, [item.start.isoformat(), item.end.isoformat(), item.length,
                      item.pto_cost, _ratio(item.efficiency),
-                     "; ".join(OrderedDict.fromkeys(item.holidays))])
+                     "; ".join(OrderedDict.fromkeys(item.holidays)),
+                     _provisional_cell(marks, item.start, item.end)])
 
     # PTO days
     pto = wb.create_sheet("PTO")
-    put(pto, ["Date", "Reason"])
+    put(pto, ["Date", "Reason", "Provisional"])
     named = _named_days(config)
     for date in plan.pto_dates:
-        put(pto, [date.isoformat(), named.get(date, "")])
+        put(pto, [date.isoformat(), named.get(date, ""), _pto_cell(marks, plan, date)])
 
     # PTO per month
     monthly = wb.create_sheet("PTO per month")
@@ -390,10 +486,12 @@ def write_exports(
         # newline="" semantics: the text already carries CRLF line ends.
         payloads.append((targets["--export-ics"], "--export-ics", _write_bytes(text.encode("utf-8"))))
     if "--export-csv" in targets:
-        text = render_csv(plan, config)
+        text = render_csv(plan, config, holidays_by_year, goal)
         payloads.append((targets["--export-csv"], "--export-csv", _write_bytes(text.encode("utf-8"))))
     if "--export-xlsx" in targets:
-        workbook = build_workbook(_require_plan(plan, "--export-xlsx"), config, curve)
+        workbook = build_workbook(
+            _require_plan(plan, "--export-xlsx"), config, curve, holidays_by_year, goal
+        )
         payloads.append((targets["--export-xlsx"], "--export-xlsx", workbook.save))
 
     for target, flag, writer in payloads:
