@@ -10,6 +10,7 @@ This module is deliberately dependency-free; all date math uses the stdlib.
 from __future__ import annotations
 
 import calendar as _calendar
+import dataclasses
 import datetime as dt
 import re
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ __all__ = [
     "NthWeekday",
     "RelativeTo",
     "ExplicitDate",
+    "STATUSES",
     "EasterRelative",
     "WeekdayOnOrAfter",
     "Rule",
@@ -153,12 +155,20 @@ class RelativeTo:
         return f"{self.anchor} {sign} {abs(self.offset)} day(s)"
 
 
+#: How sure we are of a dated holiday: ``confirmed`` (published by the
+#: employer), ``assumed`` (believed to be paid, not confirmed) or
+#: ``observed-unconfirmed`` (the holiday is paid, the observed date is a guess).
+STATUSES = ("confirmed", "assumed", "observed-unconfirmed")
+
+
 @dataclass(frozen=True)
 class ExplicitDate:
     """A one-off date, e.g. a company shutdown day announced for a single year."""
 
     name: str
     date: dt.date
+    #: ``None`` means the status was never stated; it counts as confirmed.
+    status: Optional[str] = None
 
     def actual(self, year: int, _resolved: Dict[str, dt.date]) -> Optional[dt.date]:
         return self.date if self.date.year == year else None
@@ -226,6 +236,12 @@ class ResolvedHoliday:
     name: str
     actual: dt.date
     observed: dt.date
+    #: Confirmation status of a dated holiday (see :data:`STATUSES`), if stated.
+    status: Optional[str] = None
+
+    @property
+    def unconfirmed(self) -> bool:
+        return self.status is not None and self.status != "confirmed"
 
     @property
     def shifted(self) -> bool:
@@ -357,7 +373,14 @@ def resolve_year(
     for rule, actual in ordered:
         observed = observed_date(actual, workweek, observance, taken)
         taken.add(observed)
-        resolved.append(ResolvedHoliday(name=rule.name, actual=actual, observed=observed))
+        resolved.append(
+            ResolvedHoliday(
+                name=rule.name,
+                actual=actual,
+                observed=observed,
+                status=getattr(rule, "status", None),
+            )
+        )
     resolved.sort(key=lambda h: (h.observed, h.name))
     return resolved
 
@@ -503,6 +526,24 @@ def _parse_when(name: str, when: str) -> Rule:
 
 def rule_from_mapping(data: Dict[str, object]) -> Rule:
     """Build a rule from a config-file mapping."""
+    rule = _rule_from_mapping(data)
+    if "status" not in data:
+        return rule
+    status = str(data["status"]).strip().lower()
+    if status not in STATUSES:
+        raise ValueError(
+            f"holiday {rule.name!r}: status must be one of {', '.join(STATUSES)} "
+            f"(got {data['status']!r})"
+        )
+    if not isinstance(rule, ExplicitDate):
+        raise ValueError(
+            f"holiday {rule.name!r}: 'status' is only supported on entries with an "
+            "explicit 'date' (a one-off day), not on recurring rules"
+        )
+    return dataclasses.replace(rule, status=status)
+
+
+def _rule_from_mapping(data: Dict[str, object]) -> Rule:
     if "name" not in data:
         raise ValueError(f"holiday entry is missing 'name': {data!r}")
     name = str(data["name"])

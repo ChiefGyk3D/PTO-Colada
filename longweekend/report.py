@@ -13,9 +13,43 @@ from .efficiency import ReturnCurve
 from .planner import PtoPlan
 from .schedule import Break, Day, DayKind, Opportunity
 
-__all__ = ["render_text", "render_json", "render_ics"]
+__all__ = ["render_text", "render_json", "render_ics", "provisional_assumptions"]
 
 _RULE = "-" * 72
+
+_STATUS_NOTE = {
+    "assumed": "assumed to be a paid day, not confirmed",
+    "observed-unconfirmed": "holiday is paid, observed date not confirmed",
+}
+
+
+def provisional_assumptions(
+    holidays_by_year: Dict[int, List[ResolvedHoliday]],
+) -> List[ResolvedHoliday]:
+    """Holidays in the window whose date is not confirmed, in date order.
+
+    Any result computed from the calendar depends on these days, so a
+    non-empty list makes the whole result provisional.
+    """
+    found = [h for year in sorted(holidays_by_year) for h in holidays_by_year[year] if h.unconfirmed]
+    return sorted(found, key=lambda h: h.observed)
+
+
+def _provisional_text(assumptions: List[ResolvedHoliday]) -> List[str]:
+    if not assumptions:
+        return []
+    lines = [
+        "PROVISIONAL: this result depends on days that are not confirmed. "
+        "Confirm them with the employer",
+        "and rerun; a changed date can change every number below.",
+        "  Unconfirmed:",
+    ]
+    for h in assumptions:
+        lines.append(
+            f"    {h.observed.strftime('%a %b %d, %Y')}  {h.name}: {_STATUS_NOTE.get(h.status or '', h.status)}"
+        )
+    lines.append("")
+    return lines
 
 
 # --------------------------------------------------------------------------- text
@@ -34,6 +68,7 @@ def render_text(
     lines: List[str] = []
     lines.append(f"{config.name} - {_describe_config(config)}")
     lines.append("")
+    lines.extend(_provisional_text(provisional_assumptions(holidays_by_year)))
     if plan is not None:
         lines.extend(_render_headline(plan, config))
 
@@ -54,6 +89,8 @@ def render_text(
                 note = ""
                 if holiday.shifted:
                     note = f"   (falls on {holiday.actual.strftime('%a %b %d')}, observed here)"
+                if holiday.unconfirmed:
+                    note += f"   [{holiday.status}]"
                 lines.append(f"    {holiday.observed.strftime('%a %b %d')}  {holiday.name}{note}")
             lines.append("")
 
@@ -354,6 +391,13 @@ def render_json(
         },
         "years": {},
     }
+    assumptions = provisional_assumptions(holidays_by_year)
+    if assumptions:
+        payload["provisional"] = True
+        payload["assumptions"] = [
+            {"name": h.name, "observed": h.observed.isoformat(), "status": h.status}
+            for h in assumptions
+        ]
     years: Dict[str, object] = payload["years"]  # type: ignore[assignment]
     for year in sorted(holidays_by_year):
         years[str(year)] = {
@@ -445,14 +489,26 @@ def render_ics(
 ) -> str:
     """Emit an all-day-event calendar of holidays, PTO days and planned breaks."""
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    assumptions = provisional_assumptions(holidays_by_year)
+    caveat = ""
+    if assumptions:
+        caveat = "PROVISIONAL: depends on unconfirmed days (" + ", ".join(
+            h.name for h in assumptions
+        ) + ")"
     lines: List[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//Long Weekend Planner//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{_escape(config.name)} time off",
+        f"X-WR-CALNAME:{_escape(config.name)} time off" + (" (PROVISIONAL)" if assumptions else ""),
     ]
+    if assumptions:
+        lines.append("X-LWP-PROVISIONAL:TRUE")
+        for h in assumptions:
+            lines.append(
+                f"X-LWP-ASSUMPTION:{_escape(h.name)} {h.observed.isoformat()} {h.status}"
+            )
 
     if include_holidays:
         for year in sorted(holidays_by_year):
@@ -466,7 +522,7 @@ def render_ics(
                             f"Observed holiday (actual date {holiday.actual.isoformat()})"
                             if holiday.shifted
                             else "Company holiday"
-                        ),
+                        ) + (f" PROVISIONAL: {_STATUS_NOTE.get(holiday.status or '', '')}" if holiday.unconfirmed else ""),
                         stamp=stamp,
                         category="HOLIDAY",
                     )
@@ -483,7 +539,7 @@ def render_ics(
                     summary=name or "PTO",
                     description=(
                         f"{name} (booked as time off)" if name else "Planned time off"
-                    ),
+                    ) + (f" {caveat}" if caveat else ""),
                     stamp=stamp,
                     category="PTO",
                 )
@@ -493,6 +549,8 @@ def render_ics(
             notes = names or "Long weekend"
             if efficiency and item.efficiency is not None:
                 notes += f" ({item.efficiency:.1f} days off per PTO day)"
+            if caveat:
+                notes += f" {caveat}"
             lines.extend(
                 _event(
                     start=item.start,

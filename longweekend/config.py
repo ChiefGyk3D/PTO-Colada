@@ -24,6 +24,7 @@ from .conferences import (
 from .observances import PersonalDay, resolve_observances
 from .catalog import (
     DEFAULT_WORKWEEK,
+    ExplicitDate,
     KNOWN,
     Observance,
     resolve_year,
@@ -481,9 +482,14 @@ def _reject_same_day(rules: Sequence[Rule]) -> None:
         for holiday in resolve_year(rules, year, observance=Observance.NONE):
             dates.setdefault(holiday.name, set()).add(holiday.actual)
 
+    # Two one-off dated entries are an explicit statement of two names for one
+    # day (a real calendar), not a rule that might have been defined twice.
+    explicit = {r.name for r in rules if isinstance(r, ExplicitDate)}
     names = sorted(dates)
     for i, first in enumerate(names):
         for second in names[i + 1:]:
+            if first in explicit and second in explicit:
+                continue
             if dates[first] and dates[first] == dates[second]:
                 raise ValueError(
                     f"{first!r} and {second!r} are always the same day; keep one "
