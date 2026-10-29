@@ -1,0 +1,301 @@
+"""Efficiency: what each extra PTO day buys, and where to stop spending.
+
+The planner answers "given this budget, what is the best plan?". This module
+answers the question people actually ask first: "how much budget is worth
+spending?". It reruns the exact planner for every budget from 0 up to the
+ceiling and records the result, which gives a return curve.
+
+Terms
+-----
+*Days in breaks* is the number of days that fall inside a break of at least
+``min_break`` consecutive days off -- the same quantity the planner maximises.
+Weekends and holidays that do not belong to such a break are not counted.
+The *efficiency* of a plan (or one break) is days in breaks per PTO day spent.
+
+The *budget* on the curve is a per-year cap: budget ``b`` grants every year
+``min(its grant, b)`` PTO days, with floating holidays, carryover, committed
+days and blackouts exactly as configured. ``pto_spent`` is what the planner
+actually booked across the whole window, floating days included.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set
+
+from .planner import PtoBudget, PtoPlan, optimize_pto
+from .schedule import Day, DayKind
+
+__all__ = ["CurvePoint", "ReturnCurve", "capped_budget", "return_curve"]
+
+_EPSILON = 1e-9
+
+
+@dataclass
+class CurvePoint:
+    budget: int            #: per-year PTO cap this point was planned with
+    pto_spent: int         #: leave actually booked across the window
+    days_in_breaks: int
+    #: Days gained per extra day booked, relative to the previous point;
+    #: ``None`` for the first point on the curve.
+    marginal: Optional[float] = None
+
+    @property
+    def days_per_pto(self) -> Optional[float]:
+        return self.days_in_breaks / self.pto_spent if self.pto_spent else None
+
+
+@dataclass
+class ReturnCurve:
+    points: List[CurvePoint]
+    #: The plan behind each point, keyed by budget, so callers can adopt one.
+    #: Valid keys are exactly the budgets in ``points``; others raise
+    #: ``KeyError``. Plans for budgets the curve skipped as saturated are made
+    #: on first access (see :class:`_CurvePlans`).
+    plans: Mapping[int, PtoPlan] = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def knee(self) -> Optional[CurvePoint]:
+        """The last budget that still earns the best rate of return.
+
+        Once the best marginal return has been reached, the knee is the point
+        just before the first budget step that earns less. ``None`` when the
+        return never falls (including a curve with a single point).
+        """
+        marginals = [p.marginal for p in self.points if p.marginal is not None]
+        if not marginals:
+            return None
+        best = max(marginals)
+        peak = next(
+            i for i, p in enumerate(self.points)
+            if p.marginal is not None and p.marginal >= best - _EPSILON
+        )
+        for index in range(peak + 1, len(self.points)):
+            marginal = self.points[index].marginal
+            if marginal is not None and marginal < best - _EPSILON:
+                return self.points[index - 1]
+        return None
+
+    def _hull(self) -> List[CurvePoint]:
+        """The upper concave hull of days in breaks against PTO spent.
+
+        The curve is not smooth: one day can return nothing while the next two
+        return a whole new break, and a long tail alternates between poor and
+        good days. The hull is the best that any mix of budgets can average,
+        so its slopes only fall, and comparing them with a threshold is
+        meaningful where comparing neighbouring steps is not.
+        """
+        hull: List[CurvePoint] = []
+        for point in self.points:
+            if hull and point.pto_spent == hull[-1].pto_spent:
+                if point.days_in_breaks <= hull[-1].days_in_breaks:
+                    continue  # extra budget that bought nothing
+                hull.pop()
+            while len(hull) >= 2 and _turns_up(hull[-2], hull[-1], point):
+                hull.pop()
+            hull.append(point)
+        return hull
+
+    def stop_for_min_return(self, minimum: float) -> CurvePoint:
+        """Where to stop so that spending keeps averaging ``minimum`` days per PTO day.
+
+        Walk the upper hull of the curve and stop at the last vertex reached by
+        a slope of at least ``minimum``. Looking across a stretch of budgets,
+        rather than at one day, means a day that returns nothing on its own
+        (the first of two days that bridge a midweek holiday) does not end the
+        search, and neither does a poor day followed by a good one. The last
+        point is returned when every stretch clears the bar.
+        """
+        hull = self._hull()
+        chosen = hull[0]
+        for start, end in zip(hull, hull[1:]):
+            gained = end.days_in_breaks - start.days_in_breaks
+            booked = end.pto_spent - start.pto_spent
+            if gained < minimum * booked - _EPSILON:
+                break
+            chosen = end
+        return chosen
+
+    def cheapest_for_target(self, target: int) -> CurvePoint:
+        """The smallest budget reaching ``target`` days in breaks."""
+        for point in self.points:
+            if point.days_in_breaks >= target:
+                return point
+        best = self.points[-1]
+        raise ValueError(
+            f"cannot reach {target} days in breaks: a budget of {best.budget} PTO "
+            f"day(s) per year can reach at most {best.days_in_breaks} days. "
+            "Raise the budget or lower the target."
+        )
+
+    def as_dicts(self) -> List[Dict[str, Any]]:
+        """The curve as plain rows, ready for JSON or a spreadsheet export."""
+        knee = self.knee
+        return [
+            {
+                "budget": p.budget,
+                "pto_spent": p.pto_spent,
+                "days_in_breaks": p.days_in_breaks,
+                "marginal": round(p.marginal, 3) if p.marginal is not None else None,
+                "days_per_pto": round(p.days_per_pto, 3) if p.days_per_pto is not None else None,
+                "knee": knee is not None and p.budget == knee.budget,
+            }
+            for p in self.points
+        ]
+
+
+class _Planner:
+    """Plans one per-year cap with fixed settings; a class so a curve can be pickled."""
+
+    def __init__(
+        self,
+        days: Sequence[Day],
+        budget: PtoBudget,
+        years: Sequence[int],
+        min_break: int,
+        max_consecutive_pto: Optional[int],
+        committed: Optional[Set[dt.date]],
+        long_break_bonus: int,
+    ) -> None:
+        self.days = days
+        self.budget = budget
+        self.years = years
+        self.min_break = min_break
+        self.max_consecutive_pto = max_consecutive_pto
+        self.committed = committed
+        self.long_break_bonus = long_break_bonus
+
+    def __call__(self, cap: int) -> PtoPlan:
+        return optimize_pto(
+            self.days,
+            capped_budget(self.budget, cap, self.years),
+            min_break=self.min_break,
+            max_consecutive_pto=self.max_consecutive_pto,
+            committed=self.committed,
+            long_break_bonus=self.long_break_bonus,
+        )
+
+
+class _CurvePlans(Mapping[int, PtoPlan]):
+    """The plan behind each of a curve's budgets, made when first asked for.
+
+    The keys are exactly the curve's budgets: anything else raises
+    ``KeyError`` as a dict would, and ``in``, ``len`` and iteration never plan
+    anything. Budgets the curve skipped (past a year's working days) are
+    planned on first access and remembered, so ``values()`` and ``items()``
+    plan every skipped budget -- iterate the keys when that is not wanted.
+    """
+
+    def __init__(self, planner: _Planner) -> None:
+        self._planner = planner
+        self._budgets: List[int] = []
+        self._made: Dict[int, PtoPlan] = {}
+
+    def _record(self, cap: int, plan: Optional[PtoPlan] = None) -> None:
+        self._budgets.append(cap)
+        if plan is not None:
+            self._made[cap] = plan
+
+    def __getitem__(self, cap: int) -> PtoPlan:
+        if cap not in self._budgets:
+            raise KeyError(cap)
+        plan = self._made.get(cap)
+        if plan is None:
+            plan = self._made[cap] = self._planner(cap)
+        return plan
+
+    def __contains__(self, cap: object) -> bool:
+        return cap in self._budgets
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._budgets)
+
+    def __len__(self) -> int:
+        return len(self._budgets)
+
+
+def _turns_up(a: CurvePoint, b: CurvePoint, c: CurvePoint) -> bool:
+    """True when ``b`` lies on or below the line from ``a`` to ``c``."""
+    return (
+        (b.days_in_breaks - a.days_in_breaks) * (c.pto_spent - b.pto_spent)
+        <= (c.days_in_breaks - b.days_in_breaks) * (b.pto_spent - a.pto_spent)
+    )
+
+
+def capped_budget(budget: PtoBudget, cap: int, years: Sequence[int]) -> PtoBudget:
+    """``budget`` with every year's PTO grant held to at most ``cap`` days."""
+    return PtoBudget(
+        per_year={year: min(budget.for_year(year), cap) for year in years},
+        default=min(budget.default, cap),
+        carryover=budget.carryover,
+        floating_per_year=dict(budget.floating_per_year),
+        floating=budget.floating,
+    )
+
+
+def return_curve(
+    days: Sequence[Day],
+    budget: PtoBudget,
+    min_break: int = 4,
+    max_consecutive_pto: Optional[int] = None,
+    committed: Optional[Set[dt.date]] = None,
+    long_break_bonus: int = 0,
+    max_budget: Optional[int] = None,
+) -> ReturnCurve:
+    """Plan every per-year budget from 0 to the ceiling and record what each buys.
+
+    The ceiling is ``max_budget``, or the largest yearly grant in ``budget``.
+    Budgets too small to honor committed days are left off the curve, which
+    then starts at the first feasible one; if even the ceiling is infeasible
+    the planner's error is raised.
+    """
+    years = sorted({d.date.year for d in days})
+    ceiling = max_budget if max_budget is not None else max(
+        (budget.for_year(year) for year in years), default=budget.default
+    )
+
+    # No year can take more PTO than it has working days, so once the cap
+    # reaches that every larger budget can plan identically; reuse the result
+    # rather than rerunning the dynamic program for each one. That holds only
+    # when a year's allowance does not depend on the cap beyond its own grant:
+    # with carryover, a year granted fewer days than it has working days lives
+    # off days rolled from the year before, and those exist only while the cap
+    # leaves that earlier year unused days. Then every budget is replanned.
+    workdays = {
+        y: sum(1 for d in days if d.date.year == y and d.kind is DayKind.WORK and not d.blackout)
+        for y in years
+    }
+    skippable = budget.carryover == 0 or all(
+        budget.for_year(y) >= workdays[y] for y in years
+    )
+    usable = max(workdays.values(), default=0) if skippable else ceiling + 1
+
+    planner = _Planner(
+        days, budget, years, min_break, max_consecutive_pto, committed, long_break_bonus
+    )
+    points: List[CurvePoint] = []
+    # Skipped budgets keep their numbers but not a stored plan: a fresh plan
+    # may pick different dates among equal ones, so it is made when asked for.
+    plans = _CurvePlans(planner)
+    for cap in range(ceiling + 1):
+        if points and points[-1].budget >= usable:
+            last = points[-1]
+            points.append(CurvePoint(cap, last.pto_spent, last.days_in_breaks, 0.0))
+            plans._record(cap)
+            continue
+        try:
+            plan = planner(cap)
+        except ValueError:
+            if cap == ceiling:
+                raise
+            continue
+        point = CurvePoint(cap, plan.total_pto, plan.days_in_breaks)
+        if points:
+            previous = points[-1]
+            gained = point.days_in_breaks - previous.days_in_breaks
+            booked = point.pto_spent - previous.pto_spent
+            point.marginal = gained / booked if booked > 0 else 0.0
+        points.append(point)
+        plans._record(cap, plan)
+    return ReturnCurve(points=points, plans=plans)

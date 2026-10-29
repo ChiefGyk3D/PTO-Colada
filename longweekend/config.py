@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
@@ -60,6 +61,11 @@ class CompanyConfig:
     carryover: int = 0
     min_break: int = 4
     max_consecutive_pto: Optional[int] = None
+    #: Stop spending once the next PTO day would return fewer than this many
+    #: days in breaks; see :mod:`longweekend.efficiency`.
+    min_return: Optional[float] = None
+    #: Spend the fewest PTO days that reach this many days in breaks.
+    target_days_off: Optional[int] = None
     blackout: Set[dt.date] = field(default_factory=set)
     committed: Set[dt.date] = field(default_factory=set)
     #: Personal days off (religious observances, conferences). These are folded
@@ -192,6 +198,8 @@ def build_config(
     carryover: Optional[int] = None,
     min_break: Optional[int] = None,
     max_consecutive_pto: Optional[int] = None,
+    min_return: Optional[float] = None,
+    target_days_off: Optional[int] = None,
     blackout: Sequence[str] = (),
     committed: Sequence[str] = (),
     observe: Sequence[str] = (),
@@ -249,6 +257,10 @@ def build_config(
         config.min_break = min_break
     if max_consecutive_pto is not None:
         config.max_consecutive_pto = max_consecutive_pto
+    if min_return is not None:
+        config.min_return = min_return
+    if target_days_off is not None:
+        config.target_days_off = target_days_off
     if blackout:
         config.blackout |= parse_date_ranges(blackout)
     if committed:
@@ -319,6 +331,22 @@ def _validate_numbers(config: CompanyConfig) -> None:
     if config.max_consecutive_pto is not None and config.max_consecutive_pto < 1:
         raise ValueError(
             f"max_consecutive_pto must be at least 1 (got {config.max_consecutive_pto})"
+        )
+    # "not x >= 0" also rejects NaN, which compares false either way.
+    if config.min_return is not None and (
+        not config.min_return >= 0 or math.isinf(config.min_return)
+    ):
+        raise ValueError(
+            f"min_return must be a finite number, zero or more (got {config.min_return})"
+        )
+    if config.target_days_off is not None and config.target_days_off < 1:
+        raise ValueError(
+            f"target_days_off must be at least 1 (got {config.target_days_off})"
+        )
+    if config.min_return is not None and config.target_days_off is not None:
+        raise ValueError(
+            "min_return and target_days_off are alternatives: each decides how much "
+            "PTO to spend, so set only one"
         )
 
 
@@ -391,12 +419,26 @@ def _apply_file(config: CompanyConfig, data: Dict[str, object], path: str) -> No
         config.min_break = int(data["min_break"])  # type: ignore[arg-type]
     if "max_consecutive_pto" in data:
         config.max_consecutive_pto = int(data["max_consecutive_pto"])  # type: ignore[arg-type]
+    if "min_return" in data:
+        config.min_return = _file_number(data["min_return"], "min_return", path)
+    if "target_days_off" in data:
+        number = _file_number(data["target_days_off"], "target_days_off", path)
+        if not math.isfinite(number) or number != int(number):
+            raise ValueError(f"{path}: 'target_days_off' must be a whole number (got {number})")
+        config.target_days_off = int(number)
     if "conference_travel" in data:
         config.conference_travel = int(data["conference_travel"])  # type: ignore[arg-type]
     if "blackout" in data:
         config.blackout |= parse_date_ranges(str(v) for v in _as_list(data["blackout"]))
     if "committed" in data:
         config.committed |= parse_date_ranges(str(v) for v in _as_list(data["committed"]))
+
+
+def _file_number(value: object, key: str, path: str) -> float:
+    """A number from a config file; null, booleans and text are errors, not zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path}: {key!r} must be a number (got {value!r})")
+    return float(value)
 
 
 def _as_list(value: object) -> List[object]:
