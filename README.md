@@ -92,6 +92,9 @@ efficiency score.
   the horizon. At each year end, unspent days roll over up to `--carryover`
   (in days) and never more than that year's grant; the rest is reported as
   `use-it-or-lose-it: N hours`. `--pto-year YEAR=DAYS` still overrides one year.
+  If `--today` is a January 1, that day's refill is not added: the balance you
+  give is the year's allowance. A window with no later January 1 never uses the
+  refill, and says so.
 * **Rest.** A *rest break* is 3 or more days off in a row (holidays and
   weekends included). The report gives the longest stretch of working days
   between breaks and the average gap between breaks. `--max-work-streak N`

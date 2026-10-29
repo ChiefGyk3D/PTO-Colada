@@ -433,6 +433,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     spec: Optional[HorizonSpec] = None
     pto, pto_year = args.pto, list(args.pto_year)
     try:
+        if args.pto_hours is None and args.hours_per_day != "8":
+            print("note: --hours-per-day has no effect without --pto-hours", file=sys.stderr)
         if _wants_horizon(args):
             spec = _horizon_spec(args, today)
             pto = spec.refill_days

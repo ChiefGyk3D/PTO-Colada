@@ -19,7 +19,7 @@ from longweekend.horizon import (
     rest_metrics,
 )
 from longweekend.planner import PtoBudget, optimize_pto
-from longweekend.schedule import build_days
+from longweekend.schedule import Day, DayKind, build_days
 
 TODAY = "2026-11-02"
 
@@ -98,7 +98,7 @@ class TestNovemberIntoMarch:
     def test_text_states_the_assumptions(self, capsys):
         assert main(list(self.ARGS) + ["--carryover", "5"]) == 0
         out = capsys.readouterr().out
-        assert "refill on each January 1: 120 hours = 15 day(s)" in out
+        assert "refill on each January 1 inside the window: 120 hours = 15 day(s)" in out
         assert "carryover: up to 5 day(s) (40 hours)" in out
         assert "Longest working stretch" in out
         assert "Efficiency:" in out  # rest metrics sit next to the efficiency score
@@ -201,7 +201,30 @@ class TestMaxWorkStreak:
 
     def test_feasible_limit_is_honored(self):
         plan = self.plan(12, {2026: 4})
-        assert rest_metrics(plan.days).longest <= 12
+        # The limit binds somewhere, and nothing exceeds it.
+        assert rest_metrics(plan.days).longest == 12
+
+    @staticmethod
+    def straight_work(count):
+        start = dt.date(2026, 3, 2)
+        return [Day(start + dt.timedelta(days=i), DayKind.WORK) for i in range(count)]
+
+    def test_limit_equal_to_the_stretch_is_feasible_one_less_is_not(self):
+        # Ten working days in a row, no PTO, no days off: the stretch is exactly 10.
+        days = self.straight_work(10)
+        plan = optimize_pto(days, PtoBudget(default=0), max_work_streak=10)
+        assert rest_metrics(plan.days).longest == 10
+        with pytest.raises(ValueError, match="--max-work-streak 9 cannot be met"):
+            optimize_pto(days, PtoBudget(default=0), max_work_streak=9)
+
+    def test_pto_makes_the_tighter_limit_feasible(self):
+        # Fourteen straight working days: limit 7 needs a 3-day rest break from PTO.
+        days = self.straight_work(14)
+        with pytest.raises(ValueError, match="cannot be met"):
+            optimize_pto(days, PtoBudget(default=2), max_work_streak=7)
+        plan = optimize_pto(days, PtoBudget(default=3), max_work_streak=7)
+        assert plan.total_pto == 3
+        assert rest_metrics(plan.days).longest <= 7
 
     def test_limit_that_needs_no_pto_changes_nothing(self):
         days = federal_days(*self.WINDOW)
@@ -245,6 +268,26 @@ class TestMaxWorkStreak:
     def test_zero_is_rejected(self):
         with pytest.raises(ValueError, match="at least 1"):
             optimize_pto(federal_days(*self.WINDOW), PtoBudget(default=5), max_work_streak=0)
+
+
+class TestRefillClauses:
+    def test_no_january_first_in_window_says_so(self, capsys):
+        assert main(["--today", TODAY, "--pto-hours", "36", "--refill-hours", "120",
+                     "--no-holidays"]) == 0
+        out = capsys.readouterr().out
+        assert "not used: the window has no January 1 after today" in out
+        assert "refill on each January 1" not in out
+
+    def test_today_on_january_first_gets_no_refill_that_day(self, capsys):
+        assert main(["--today", "2027-01-01", "--pto-hours", "36", "--refill-hours", "120",
+                     "--through", "2027-06-30", "--no-holidays"]) == 0
+        out = capsys.readouterr().out
+        assert "today is January 1: that day's refill is not added" in out
+
+    def test_hours_per_day_alone_prints_a_note(self, capsys):
+        assert main(["--hours-per-day", "6", "--start-year", "2026", "--years", "1",
+                     "--no-holidays"]) == 0
+        assert "--hours-per-day has no effect without --pto-hours" in capsys.readouterr().err
 
 
 class TestGoalPathStillWorks:

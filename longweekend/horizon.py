@@ -280,10 +280,21 @@ def describe_horizon(
             f", {_fmt(spec.refill_leftover)} hour(s) left over and not planned"
             if spec.refill_leftover else ""
         )
-        lines.append(
-            f"    - refill on each January 1: {_fmt(spec.refill_hours)} hours = "
-            f"{spec.refill_days} day(s){refill_left}"
-        )
+        if spec.end.year > spec.today.year:
+            lines.append(
+                f"    - refill on each January 1 inside the window: "
+                f"{_fmt(spec.refill_hours)} hours = {spec.refill_days} day(s){refill_left}"
+            )
+        else:
+            lines.append(
+                f"    - refill of {_fmt(spec.refill_hours)} hours not used: the window "
+                "has no January 1 after today"
+            )
+        if (spec.today.month, spec.today.day) == (1, 1):
+            lines.append(
+                "    - today is January 1: that day's refill is not added; the balance "
+                "is this year's allowance"
+            )
     else:
         lines.append("    - no refill on January 1 (add --refill-hours to set one)")
     if spec.carryover_days:
